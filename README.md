@@ -1,18 +1,29 @@
 # Predicción de la accidentalidad vial en la cuidad de Medellín
 
-En este repositorio se exponen diferentes modelos para la predicción de la accidentalidad vial en la ciudad Medellín de forma: Mensual, semanal y diaria.
+En este repositorio se exponen diferentes modelos para la predicción de la accidentalidad vial en la ciudad Medellín de forma: mensual, semanal y diaria.
 
 Se separan los modelos según el tipo de accidente que se desea predecir: 
 - Accidentes viales donde solo se producen daños
 - Accidentes viales donde hay herido
 - Accidentes viales con muertos. 
 
-Esta tipología de accidentes se basa en la gravedad de los accidentes registrados en la información historica que se tiene disponible.
+Esta tipología de accidentes se basa en la gravedad de los accidentes registrados en la información histórica que se tiene disponible.
 
-El analisis realizado se resumen en el siguiente informe:
+## Recursos Disponible:
+
+El análisis realizado se resumen en el siguiente informe técnico:
+
 [Informe Técnico: Predicción de la accidentalidad vial de la cuidad de Medellín](https://rpubs.com/Manulondo95/657626)
 
 Para la visualización del aplicativo web, consulte el siguiente enlace:
 
+[Accidentalidad Vial en la cuidad de Medellín](https://william-jovel.shinyapps.io/Accidentes/)
 
-En cada una de las carpetas se encuentran los recursos y codigos usados para el desarrollo del trabajo.
+Agrupamiento de los barrios y comunas por nivel de accidentalidad:
+
+
+
+## Repositorio:
+
+En cada una de las carpetas se encuentran los recursos y códigos usados para el desarrollo del trabajo.
+
