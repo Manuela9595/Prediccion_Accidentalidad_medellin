@@ -1,0 +1,418 @@
+---
+title: "**Evaluación de modelos para la predicción semanal de accidentes viales con Gravedad: Heridos**<br>"
+
+author: "*Alexis A. Arenas Bustamante, Juan E. Arroyave Duque, William A. Jovel Tamayo, Manuela Londoño Ocampo.* <br> Curso de Analítica Predictiva <br> Universidad Nacional de Colombia <br> Facultad de Minas <br> Medellín"
+date: "Septiembre de 2019"
+
+output:
+  html_document:
+    theme: cosmo
+    highlight: haddock
+    number_sections: true
+    df_print: paged
+    toc: true
+    toc_float:
+      collapsed: True
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr) # data wrangling
+library(ranger)
+library(caret)
+library(corrplot)
+library(rsample)     # data splitting 
+library(rpart)       # performing regression trees
+library(rpart.plot)  # plotting regression trees
+library(ipred)       # bagging
+require(MASS)
+library(randomForest)
+library(tidyverse)
+library(ggpubr)
+```
+
+Se consideran tres modelos para la predicción semanal de los accidentes viales con heridos: Regresión lineal, Árbol de regresión y Random Forest. A continuación se presenta la evaluación de cada uno:
+
+# **Dataset propuesto para el modelo semanal de accidentalidad vial : Heridos**
+
+```{r, echo = FALSE}
+semanal_1 <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/Datasets/RAPIDM/SEGUNDA_CORRIDA/semanal_h_3.csv", sep=";")
+
+head(semanal_1)
+```
+
+# **Estadísticas Descriptivas**  {.tabset .tabset-fade .tabset-pills}
+
+## **Summary del conjunto de datos**
+
+```{r, echo=FALSE}
+summary(semanal_1)
+```
+
+## **Histograma de la variable dependiente**
+
+```{r, echo= FALSE}
+library(ggplot2)
+
+ggplot(semanal_1, aes(HERIDOS)) + 
+  geom_histogram(bins=12, fill = "#9999CC", position = 'identity') + 
+  xlab("Accidentes con Heridos") + ylab("Frecuencia") +
+  theme_classic2()
+
+```
+
+## **Boxplots por Periodo**
+
+```{r hitogramas, echo=FALSE}
+datosH<- semanal_1
+datosH$ANYO <- as.factor(datosH$ANYO)
+
+ggplot(datosH, aes(x=ANYO, y=HERIDOS, fill=ANYO)) + 
+  geom_boxplot(alpha=0.3) +
+  xlab("AÑO") + ylab("Accidentes con Heridos") +
+  theme(legend.position="none") + theme_classic()
+```
+
+No se observan valores atípicos en cada uno de los años.
+
+## **Correlación entre variables consideradas**
+
+```{r correlacion, echo=FALSE}
+library(corrplot)
+datosH$ANYO <- as.integer(datosH$ANYO)
+M <- cor(datosH)
+corrplot(M, method = "color")
+```
+
+Se puede observar que la variable mas correlacionada con la cantidad de accidentes semanales con heridos es FESTIVOS. En cada uno de los modelos se identificara la importancia de las variables, de modo que solo se incluyan aquellas que tengan una influencia significativa sobre la variables dependiente. El periodo no hará parte de ningún modelo puesto que solo se usa para la partición de los datos en conjuntos de entrenamiento y validación.
+
+# **Partición de los datos conjuntos de train y test**
+
+Para la validación se usaran los datos de accidentes viales ocurridos en el año 2018.
+
+Datos de Train: Se cuenta 303 observaciones para el entrenamiento de los modelos
+
+```{r, echo= FALSE}
+heridos_train <- datosH[datosH$ANYO < 5, ]
+heridos_test <- datosH[datosH$ANYO >= 5, ]
+dim(heridos_train)
+```
+
+Datos de Test: Se cuenta con 74 observaciones para la validación de los modelos
+
+```{r, echo= FALSE}
+dim(heridos_test)
+```
+
+Una vez realizada la partición de los datos, se procede con la eliminación de la variable ANYO en ambos datasets.
+
+```{r}
+heridos_train <- dplyr :: select(heridos_train, -ANYO)
+heridos_test <- dplyr :: select(heridos_test, -ANYO)
+```
+
+# **Modelo de predicción considerados** {.tabset .tabset-fade .tabset-pills}
+
+## **Regresión Lineal**
+
+**Entrenamiento del modelo**
+
+```{r}
+heridos_train$SEMANA <- as.factor(heridos_train$SEMANA)
+regresion_1 <- lm(HERIDOS ~ ., data= heridos_train)
+summary(regresion_1)
+```
+
+Las variable de SEMANA se incluyó en el modelo de regresión lineal como factor, vemos que la mayoría de variables son significativas para el modelo y según el summary se tiene un buen R-squared que explica el 88.06 % de la accidentalidad semanal con gravedad de heridos. De igual manera el valor P del estadístico F es significativo.
+
+**Métricas de Bondad para regresión lineal**
+
+```{r, echo = FALSE}
+# Compute R^2 from true and predicted values
+heridos_test$SEMANA <- as.factor(heridos_test$SEMANA)
+y_pred_train_sd <- predict(regresion_1, heridos_train)
+y_pred_test_sd <- predict(regresion_1, heridos_test)
+
+reg_1 <- data.frame(RMSE_Train = RMSE(y_pred_train_sd, heridos_train$HERIDOS),
+                    Rsquared_Train = R2(y_pred_train_sd, heridos_train$HERIDOS),
+                    RMSE_Test = RMSE(y_pred_test_sd, heridos_test$HERIDOS),
+                    Rsquared_Test = R2(y_pred_test_sd, heridos_test$HERIDOS))
+reg_1
+
+```
+
+Comparando las métricas consideradas tanto para el entrenamiento como para la validación del modelo, observamos que en ambos se obtiene un R-squared bueno, superior al 85%, aunque con una leve variación. En cuanto al RMSE, es posible identificar que la diferencia entre los conjuntos de entrenamiento y test es del 15 %, esto indica un buen ajuste para ambos conjuntos de datos.
+
+
+**Ajuste de las predicciones vs valores reales**
+```{r}
+plot(y_pred_test_sd, heridos_test$HERIDOS,las=1, xlab="Predicciones", ylab = "Accidentes con Heridos")
+abline(a=1,b=1,lwd=2,col="red")
+```
+
+En el gráfico de dispersión se puede observar que el modelo tiene mejor capacidad de predicción para niveles bajos de accidentalidad pero no tanto para niveles altos.
+
+## **Árbol Regresor**
+
+**Entrenamiento del modelo**
+
+Se toma el modelo mas simple para el árbol regresor, a partir de este se realizara una búsqueda tipo grid search, de parámetros de restricción óptimos. Se definen ademas funciones para extraer el mínimo error asociado con el valor óptimo de costo de complejidad (CP) de cada modelo y  el valor óptimo CP.
+
+```{r}
+set.seed(123)
+
+dt_h <- rpart(
+  formula = HERIDOS ~ .,
+  data    = heridos_train,
+  method  = "anova"
+  )
+```
+
+**Representación gráfica del árbol regresor sin tuning**
+
+```{r, echo= FALSE}
+rpart.plot(dt_h)
+```
+
+**Ajuste de parámetro de restricción para el árbol regresor**
+
+Se realiza una búsqueda de los parámetros óptimos de minsplit y maxdepth para el árbol regresor: 
+
+En la siguiente gráfica se puede observar el numero óptimo de nodos identificado por el modelo que reduce el error asociado. Este será el punto de partida para definir entre que valores puede variar el parámetro de profundidad del árbol. Vemos que este valor es de 4 divisiones y 5 nodos finales.
+
+
+```{r}
+plotcp(dt_h)
+
+dt_sd2 <- rpart(
+    formula = HERIDOS ~ .,
+    data    = heridos_train,
+    method  = "anova", 
+    control = list(cp = 0, xval = 10)
+)
+
+```
+
+El error de validación cruzada asociado es de 0.2542, este valor se puede mejorar en el proceso de tuning
+
+```{r, echo = FALSE}
+dt_h$cptable
+```
+
+El siguiente código define una función grid para la búsqueda de diferentes combinaciones de minsplit y maxdepth. También las funciones que extraen el optimo cp y el mínimo error asociado.
+
+```{r}
+
+hyper_grid_h <- expand.grid(
+  minsplit = seq(2, 20, 1),
+  maxdepth = seq(2, 30, 1)
+)
+models_h <- list()
+
+for (i in 1:nrow(hyper_grid_h)) {
+  
+  # get minsplit, maxdepth values at row i
+  minsplit <- hyper_grid_h$minsplit[i]
+  maxdepth <- hyper_grid_h$maxdepth[i]
+
+  # train a model and store in the list
+  models_h[[i]] <- rpart(
+    formula = HERIDOS ~ .,
+    data    = heridos_train,
+    method  = "anova",
+    control = list(minsplit = minsplit, maxdepth = maxdepth)
+    )
+}
+
+# function to get optimal cp
+get_cp <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  cp <- x$cptable[min, "CP"] 
+}
+
+# function to get minimum error
+get_min_error <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  xerror <- x$cptable[min, "xerror"] 
+}
+```
+
+Agregaremos los resultados de la búsqueda a la grilla de hyper-parámetros y filtraremos los 5 valores con error mínimo.
+
+```{r}
+hyper_grid_h %>%
+  mutate(
+    cp    = purrr::map_dbl(models_h, get_cp),
+    error = purrr::map_dbl(models_h, get_min_error)
+    ) %>%
+  arrange(error) %>%
+  top_n(-5, wt = error)
+```
+
+Vemos que el error se redujo a 0.196, lo cual indica mejores modelos en comparación con el modelo inicial. Se entrena el árbol regresor con las combinaciones que encabezan los resultados anteriores:
+
+```{r}
+optimal_tree_h1 <- rpart(
+    formula = HERIDOS ~ .,
+    data    = heridos_train,
+    method  = "anova",
+    control = list(minsplit = 5, maxdepth = 25, cp = 0.01)
+    )
+```
+
+**Métricas de Bondad para el mejor árbol regresor**
+
+```{r}
+pred_dt1_train = predict(optimal_tree_h1, newdata=heridos_train)
+pred_dt1_test = predict(optimal_tree_h1, newdata=heridos_test)
+
+
+
+
+dt_sd_op1 <- data.frame(RMSE_Train = RMSE(pred_dt1_train, heridos_train$HERIDOS),
+                    Rsquared_Train = R2(pred_dt1_train, heridos_train$HERIDOS),
+                    RMSE_Test = RMSE(pred_dt1_test, heridos_test$HERIDOS),
+                    Rsquared_Test = R2(pred_dt1_test, heridos_test$HERIDOS))
+
+
+dt_sd_op1
+```
+
+Comparando las métricas consideradas tanto para el entrenamiento como para la validación del árbol óptimo, observamos que en ambas se obtuvo buenos R-squared, superiores al 82%; en comparación con el modelo de regresión lineal es posible afirmar que su variacion es menor tanto para el R-squared como para el RMSE. La variación entre los RMSE es del 7.9%, esta variación es baja y nos indica un mejor ajuste obtenido.
+
+**Mejor árbol regresor obtenido**
+
+```{r, echo= FALSE}
+library(rpart.plot)
+prp(optimal_tree_h1)
+```
+
+## **Random Forest**
+
+**Entrenamiento del modelo**
+
+Se toma el modelo mas simple, a partir de este se realizará una búsqueda tipo grid search de los hiper parámetros óptimos, mediante el uso de la librería Range. Se analizaron en total 432 modelos diferentes con variaciones en mtry, mínimo tamaño de muestras en el nodo, y tamaño de la muestra.
+
+```{r}
+set.seed(101)
+rf_sd = randomForest(HERIDOS ~ ., data = heridos_train)
+rf_sd
+```
+
+Inicialmente, observamos que la varianza explicada por el modelo es del 85,19 %.
+
+**Este gráfico muestra el error vs. el número de árboles**
+
+```{r, echo = FALSE}
+plot(rf_sd)
+```
+
+ **Afinamiento del modelo Random Forest**
+
+Se define la siguiente grilla de búsqueda:
+
+```{r}
+set.seed(101)
+# hyperparameter grid search
+hyper_grid_rf <- expand.grid(
+  mtry       = seq(1, 9, by = 1),
+  node_size  = seq(7, 30, by = 2),
+  sampe_size = c(.55, .632, .70, .80),
+  OOB_RMSE   = 0
+)
+
+# total number of combinations
+#nrow(hyper_grid_rf)
+```
+
+Se utiliza la librería Ranger para la búsqueda de los mejores hyper parámetros:
+
+```{r}
+for(i in 1:nrow(hyper_grid_rf)) {
+  
+  # train model
+  model <- ranger(
+    formula         = HERIDOS ~ ., 
+    data            = heridos_train, 
+    num.trees       = 500,
+    mtry            = hyper_grid_rf$mtry[i],
+    min.node.size   = hyper_grid_rf$node_size[i],
+    sample.fraction = hyper_grid_rf$sampe_size[i],
+    seed            = 101
+  )
+  
+  # add OOB error to grid
+  hyper_grid_rf$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+
+hyper_grid_rf %>% 
+  dplyr::arrange(OOB_RMSE) %>%
+  head(10)
+```
+
+Se ajusta el modelo con los mejores hyper parámetros obtenidos:
+
+```{r}
+set.seed(101)
+mejorRandomforest <- randomForest(HERIDOS ~., data = heridos_train, mtry = 9, nodesize = 29, ntree = 500, 
+                                  sampe_size= 0.8, importance = TRUE)
+mejorRandomforest
+
+```
+
+Con la función importance() se extrae la importancia de las variables.
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+importancia_pred <- as.data.frame(importance(mejorRandomforest, scale = TRUE))
+importancia_pred <- rownames_to_column(importancia_pred, var = "variable")
+p1 <- ggplot(data = importancia_pred, aes(x = reorder(variable, `%IncMSE`),
+                                          y = `%IncMSE`,
+                                          fill = `%IncMSE`)) +
+    labs(x = "variable", title = "Reducción de MSE") +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom")
+
+p2 <- ggplot(data = importancia_pred, aes(x = reorder(variable, IncNodePurity),
+                                          y = IncNodePurity,
+                                          fill = IncNodePurity)) +
+    labs(x = "variable", title = "Reducción de pureza") +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom")
+ggarrange(p1, p2)
+```
+
+**Métricas de bondad para modelo de Random Forest**
+
+```{r}
+pred_randomForest_t <- predict(mejorRandomforest, heridos_train)
+pred_randomForest <- predict(mejorRandomforest, heridos_test)
+
+dt_rf_1 <- data.frame(RMSE_Train = RMSE(pred_randomForest_t, heridos_train$HERIDOS),
+                    Rsquared_Train = R2(pred_randomForest_t, heridos_train$HERIDOS),
+                    RMSE_Test = RMSE(pred_randomForest, heridos_test$HERIDOS),
+                    Rsquared_Test = R2(pred_randomForest, heridos_test$HERIDOS))
+
+
+dt_rf_1
+
+```
+
+Observamos que los R-squared para entrenamiento y validación son mas altos en comparación con los obtenidos con los modelos de regresión lineal y Árbol regresor. El RMSE presenta una variación aproximada de 29%, a pesar de que no es la menor variación de los modelos expuestos, la variación con respecto al Rsquared es mas baja y considerando esta métrica se elige al Random Forest como mejor modelo.
+
+
+
