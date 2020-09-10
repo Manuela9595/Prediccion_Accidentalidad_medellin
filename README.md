@@ -21,7 +21,11 @@ Para la visualización del aplicativo web, consulte el siguiente enlace:
 
 Agrupamiento de los barrios y comunas por nivel de accidentalidad:
 
+Tipo 1: [Agrupamiento Multivariable](https://rpubs.com/wajovel/acciodentesmed)
+Tipo 2: [Agrupamiento Univariable](https://rpubs.com/wajovel/Clustacc2)
 
+Video Promocional:
+[sinfomovil](https://william-jovel.shinyapps.io/Accidentes/)
 
 ## Repositorio:
 
