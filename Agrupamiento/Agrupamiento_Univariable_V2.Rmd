@@ -1,0 +1,486 @@
+---
+title: "Agrupamiento Univariable"
+author: "Manuela Londono Ocampo, Alexis Arenas Bustamante, Juan Esteban Arroyave, William Jovel Tamayo"
+date: "8/9/2020"
+output: html_document
+---
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Se importan las librerías a usar:
+
+```{r}
+library(dplyr)
+library(magrittr)
+library(dplyr)
+library(knitr)
+library(leaflet)
+library(cluster)
+library(clustertend)
+library(NbClust)
+library(factoextra)
+library(fpc)
+library(clValid)
+library(kohonen)
+```
+
+Se leen los datos con los que se trabajará. Es importante mencionar que estos datos previamente pasaron por un proceso de preprocesamiento en el cual se hizo la respectiva gestión de datos faltantes, datos atípicos y corrección de datos como el Barrio o la Comuna donde se presentó el accidente:
+
+```{r}
+datos <- read.csv("C:/RDATA/datos_final_corregido.csv")
+
+```
+
+# 1. Definición y creación de variables para el agrupamiento
+
+## 1.1. Accidentes por barrio
+
+Se totalizó y se agrupó la cantidad de accidentes en cada uno de los barrios de Medellín, esto con el fin de realizar un análisis de cuáles barrios presentan mayor o menor accidentalidad.
+
+```{r}
+df_acc <- data.frame(aggregate(CANT.~BARRIO, data = datos, FUN = sum))
+
+```
+
+Escalamos los datos para el agrupamiento.
+
+```{r}
+df_acc$CANT_sc <- scale(df_acc$CANT.)
+
+```
+
+## 1.2. Muertos en accidentes por barrio
+
+Se obtuvo, para cada barrio de Medellín, la proporción de accidentes que involucraron muertos sobre el total de accidentes en aquel barrio entre los años 2014-2018. 
+
+```{r}
+datos$MUERTOS <- ifelse(datos$GRAVEDAD == 'Muerto', 1, 0)
+df_mue <- data.frame(aggregate(MUERTOS~BARRIO, data = datos, FUN = mean))
+
+```
+
+Escalamos los datos para el agrupamiento.
+
+```{r}
+df_mue$MUERTOS_sc <- scale(df_mue$MUERTOS)
+
+```
+
+## 1.3. Heridos en accidentes por barrio
+
+Se obtuvo, para cada barrio de Medellín, la proporción de accidentes que involucraron heridos sobre el total de accidentes en aquel barrio entre los años 2014-2018.
+
+```{r}
+datos$HERIDOS <- ifelse(datos$GRAVEDAD == 'Herido',1,0)
+df_her <- data.frame(aggregate(HERIDOS~BARRIO, data = datos, FUN=mean))
+
+```
+
+Escalamos los datos para el agrupamiento.
+
+```{r}
+df_her$HERIDOS_sc <- scale(df_her$HERIDOS)
+
+```
+
+## 1.4. Atropellos en accidentes por barrio
+
+Se obtuvo, para cada barrio de Medellín, la proporción de accidentes que involucraron atropellos sobre el total de accidentes en aquel barrio entre los años 2014-2018.
+
+```{r}
+datos$ATROPELLOS <- ifelse(datos$CLASE == "Atropello",1,ifelse(datos$CLASE == "Choque y Atropello",1,0))
+df_atr <- data.frame(aggregate(ATROPELLOS~BARRIO, data = datos, FUN = mean))
+
+```
+
+Escalamos los datos para el agrupamiento.
+
+```{r}
+df_atr$ATR_sc <- scale(df_atr$ATROPELLOS)
+
+```
+
+# 2. Agrupamiento
+
+## 2.1. Estadísticos y métricas para el agrupamiento
+
+### 2.1.1. Hopkins
+
+El estadístico de Hopkins nos permite identificar si un conjunto de datos es óptimo para hacer agrupamiento calculando la probabilidad de que los datos que se pretenden agrupar provengan de una distribución uniforme.
+
+En el estadístico de Hopkins buscamos valor cercanos a cero, esto indicaría que los datos tienen poca probabilidad de tener una distribución uniforme y que así sea de utilidad realizar el agrupamiento. Por el contrario, valores cercanos a 0.5 indicarían que los datos se distribuyen uniformemente y por lo tanto no tendría sentido realizar el agrupamiento.
+
+Se crean unos dataframes con los datos escalados de cada variable que luego serán usados para calcular el estadístico de Hopkins.
+
+```{r}
+df_acc_h <- data.frame(df_acc$CANT_sc)
+df_mue_h <- data.frame(df_mue$MUERTOS_sc)
+df_her_h <- data.frame(df_her$HERIDOS_sc)
+df_atr_h <- data.frame(df_atr$ATR_sc)
+
+set.seed(123)
+
+hopkins(df_acc_h, n=nrow(df_acc_h)-1)
+hopkins(df_acc_h, n=nrow(df_mue_h)-1)
+hopkins(df_acc_h, n=nrow(df_her_h)-1)
+hopkins(df_acc_h, n=nrow(df_atr_h)-1)
+
+```
+
+Los estadísticos de Hopkins resultantes para cada una de las variables a usar son menores a 0.5, incluso están más cerca de cero, por lo tanto se puede inferir que los datos son susceptibles de agrupamiento.
+
+### 2.1.2. Número óptimo de agrupamientos (clusters)
+
+#### 2.1.2.1. El método del codo (Elbow method)
+
+El método del codo, o Elbow method, permite hallar cuales son los valores óptimos de clusters para un conjunto de datos. Este método prueba diferente hiperparámetros de número de clusters, calcula las varianza al interior de los grupos y sugiere que el valor adecuado es aquel a partir del cuál se dejan de evidenciar mejoras sustanciales en el agrupamiento.
+
+Aplicamos el método del codo a nuestros datos.
+
+```{r}
+fviz_nbclust(df_acc_h, kmeans, method = "wss")+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Se evidencia que a partir de k=2 o k=3 no hay mejoras sustanciales en el agrupamiento.
+
+```{r}
+fviz_nbclust(df_mue_h, kmeans, method = "wss")+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Se evidencia que a partir de k=2 no hay mejoras sustanciales en el agrupamiento.
+
+```{r}
+fviz_nbclust(df_her_h, kmeans, method = "wss")+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Se evidencia que a partir de k=2 y k=3 no hay mejoras sustanciales en el agrupamiento.
+
+```{r}
+fviz_nbclust(df_atr_h, kmeans, method = "wss")+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Se evidencia que a partir de k=3 no hay mejoras sustanciales en el agrupamiento.
+
+Marcamos gráficamente el punto óptimo para cada agrupamiento.
+
+Accidentes:
+
+```{r}
+fviz_nbclust(df_acc_h, kmeans, method = "wss")+ geom_vline(xintercept=2, linetype=2)+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Muertos:
+
+```{r}
+fviz_nbclust(df_mue_h, kmeans, method = "wss")+ geom_vline(xintercept=2, linetype=2)+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Heridos:
+
+```{r}
+fviz_nbclust(df_her_h, kmeans, method = "wss")+ geom_vline(xintercept=2, linetype=2)+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+Atropellos:
+
+```{r}
+fviz_nbclust(df_atr_h, kmeans, method = "wss")+ geom_vline(xintercept=3, linetype=2)+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+```
+
+#### 2.1.2.2. Ensambles
+
+También se hace uso de un método de ensamble para hallar el número óptimo de clusters a partir de 26 métricas utilizando la distancia euclideana para calcular la matriz de disimilaridad.
+
+Accidentes:
+
+```{r}
+fviz_nbclust(NbClust(df_acc_h, distance = "euclidean",min.nc = 2, max.nc = 10, method = "kmeans", index ="all"))
+
+```
+
+Muertos:
+
+```{r}
+fviz_nbclust(NbClust(df_mue_h, distance = "euclidean",min.nc = 2, max.nc = 10, method = "kmeans", index ="all"))
+
+```
+
+Heridos:
+
+```{r}
+fviz_nbclust(NbClust(df_her_h, distance = "euclidean",min.nc = 2, max.nc = 10, method = "kmeans", index ="all"))
+
+```
+
+Atropellos:
+
+```{r}
+fviz_nbclust(NbClust(df_atr_h, distance = "euclidean",min.nc = 2, max.nc = 10, method = "kmeans", index ="all"))
+
+```
+
+### 2.1.2. Elección del mejor algoritmo de Clustering
+
+Se evaluaron diferentes métodos de clustering con el fin de determinar cuál de estos es el óptimo para los datos que se tienen. Se evaluaron los siguientes métodos:
+
+- K-Means
+- PAM
+- CLARA
+- SOM
+
+Accidentes:
+
+```{r}
+intern <- clValid(df_acc_h, nClust=2:10, clMethods = c("kmeans","pam","clara", "som"),validation = "internal", maxitems = 600)
+summary(intern)
+optimalScores(intern)
+plot(intern)
+
+```
+
+Método recomendado: K-Means
+Número óptimo de clusters por mayoría: 2
+
+Muertos:
+
+```{r}
+intern <- clValid(df_mue_h, nClust=2:10, clMethods = c("kmeans","pam","clara", "som"),validation = "internal", maxitems = 600)
+summary(intern)
+plot(intern)
+
+```
+
+Método recomendado: K-Means
+Número óptimo de clusters por mayoría: 2
+
+Heridos:
+
+```{r}
+intern <- clValid(df_her_h, nClust=2:10, clMethods = c("kmeans","pam","clara", "som"),validation = "internal", maxitems = 600)
+summary(intern)
+optimalScores(intern)
+plot(intern)
+```
+
+Método recomendado: K-Means
+Número óptimo de clusters por mayoría: 2
+
+Atropellos:
+
+```{r}
+intern <- clValid(df_atr_h, nClust=2:10, clMethods = c("kmeans","pam","clara", "som"),validation = "internal", maxitems = 600)
+summary(intern)
+optimalScores(intern)
+plot(intern)
+
+```
+
+Método recomendado: K-Means
+Número óptimo de clusters por mayoría: 2
+
+### 2.1.3. Coeficiente de silhouette
+
+Este método es muy similar al método del codo pero con la diferencia que, en lugar de minimizar la varianza al interior de los clusters, busca maximizar el valor del coeficiente de silhouette que representa la similaridad de los individuos al interior de cada cluster, apelando a la premisa del agrupamiento que sugiere que los individuos al interior de un cluster deben ser tan similares como sea posible.
+
+Accidentes:
+
+```{r}
+fviz_nbclust(df_acc_h, kmeans, method = "silhouette")+  labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Silhouette\"")
+```
+
+Número óptimo de clusters: 2
+
+Muertos:
+
+```{r}
+fviz_nbclust(df_mue_h, kmeans, method = "silhouette")+  labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Silhouette\"")
+```
+
+Número óptimo de clusters: 2
+
+Heridos:
+
+```{r}
+fviz_nbclust(df_her_h, kmeans, method = "silhouette")+  labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Silhouette\"")
+```
+
+Número óptimo de clusters: 2
+
+Atropellos:
+
+```{r}
+fviz_nbclust(df_atr_h, kmeans, method = "silhouette")+  labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Silhouette\"")
+
+```
+
+Número óptimo de clusters: 2 
+
+## 2.2. K-Means
+
+Accidentes:
+
+```{r}
+grupos_acc <- kmeans(df_acc$CANT_sc, 2)
+acc_agr <- data.frame(cbind(df_acc$BARRIO, grupos_acc$cluster))
+grupos_acc$centers <- order(grupos_acc$centers)
+colnames(acc_agr) <- c("BARRIO", "GR_ACCIDENTES")
+acc_agr <- inner_join(acc_agr, df_acc, by = "BARRIO")
+
+```
+
+Muertos:
+
+```{r}
+grupos_mue <- kmeans(df_mue$MUERTOS_sc, 2)
+mue_agr <- data.frame(cbind(df_mue$BARRIO, grupos_mue$cluster))
+grupos_mue$centers <- order(grupos_mue$centers)
+colnames(mue_agr) <- c("BARRIO", "GR_MUERTOS")
+mue_agr <- inner_join(mue_agr, df_mue, by = "BARRIO")
+
+
+```
+
+Heridos:
+
+```{r}
+grupos_her <- kmeans(df_her$HERIDOS_sc, 2)
+her_agr <- data.frame(cbind(df_her$BARRIO, grupos_her$cluster))
+grupos_her$centers <- order(grupos_her$centers)
+colnames(her_agr) <- c("BARRIO", "GR_HERIDOS")
+her_agr <- inner_join(her_agr, df_her, by = "BARRIO")
+
+```
+
+Atropellos:
+
+```{r}
+grupos_atr <- kmeans(df_atr$ATR_sc, 3)
+atr_agr <- data.frame(cbind(df_atr$BARRIO, grupos_atr$cluster))
+grupos_atr$centers <- order(grupos_atr$centers)
+colnames(atr_agr) <- c("BARRIO", "GR_ATROPELLOS")
+atr_agr <- inner_join(atr_agr, df_atr, by = "BARRIO")
+
+```
+
+Se calcula la matriz de similaridad utilizando la distancia euclidiana
+
+```{r}
+distancia_acc <-dist(df_acc_h, method="euclidean")
+distancia_mue <-dist(df_mue_h, method="euclidean")
+distancia_her <-dist(df_her_h, method="euclidean")
+distancia_atr <-dist(df_atr_h, method="euclidean")
+
+```
+
+### 2.2.1. Resultados estadísticos del K-Means
+Distancia interna (intra-cluster): siloidwidth.
+Distancia externa (inter-cluster): dunn
+
+```{r}
+acc_statsKmeans <- cluster.stats(distancia_acc, grupos_acc$cluster)
+mue_statsKmeans <- cluster.stats(distancia_mue, grupos_mue$cluster)
+her_statsKmeans <- cluster.stats(distancia_her, grupos_her$cluster)
+atr_statsKmeans <- cluster.stats(distancia_atr, grupos_atr$cluster)
+
+```
+
+## 2.2.3. Mapas
+
+Se obtiene latitud y longitud promedio de cada barrio y luego se unen los datos de cada cluster.
+
+```{r}
+barrios_map <- aggregate(cbind(LATITUD, LONGITUD)~BARRIO, data = datos, FUN = mean)
+barrios_acc <- inner_join(barrios_map, acc_agr, by= "BARRIO")
+barrios_mue <- inner_join(barrios_map, mue_agr, by= "BARRIO")
+barrios_her <- inner_join(barrios_map, her_agr, by= "BARRIO")
+barrios_atr <- inner_join(barrios_map, atr_agr, by= "BARRIO")
+
+barrios_acc$COLOR <- ifelse(barrios_acc$GR_ACCIDENTES == grupos_acc$centers[1], "blue","red")
+barrios_mue$COLOR <- ifelse(barrios_mue$GR_MUERTOS == grupos_mue$centers[1], "blue","red")
+barrios_her$COLOR <- ifelse(barrios_her$GR_HERIDOS == grupos_her$centers[1], "blue","red")
+barrios_atr$COLOR <- ifelse(barrios_atr$GR_ATROPELLOS == grupos_atr$centers[1], "blue",
+                          ifelse(barrios_atr$GR_ATROPELLOS == grupos_atr$centers[2],"yellow", "red"))
+
+longitud <- barrios_acc$LONGITUD
+latitud <- barrios_acc$LATITUD
+df <- data.frame(longitud,latitud)
+leaflet(df) %>% addTiles() %>%
+  addMarkers(lng = ~longitud, lat = ~latitud,
+             clusterOptions = markerClusterOptions()
+  )
+
+```
+
+ACCIDENTES:
+
+```{r}
+color <- barrios_acc$COLOR
+barrios_acc$TAMANO <- ifelse(barrios_acc$GR_ACCIDENTES == grupos_acc$centers[1], 10,20)
+tamano <- barrios_acc$TAMANO
+titulo <- barrios_acc$BARRIO
+df <- data.frame(longitud, latitud, color, tamano, titulo)
+leaflet(df) %>% addTiles() %>%
+  addCircles(lng = ~longitud, lat = ~latitud, weight = 1, color=~color,
+             radius = ~tamano * 20, popup = ~titulo)
+
+```
+
+En el mapa de accidentes se ve reflejado una mayor accidentalidad a lo largo del corredor central de la ciudad de Medellín, en cercanías al río Medellín. Esto quizás se debe a que el tráfico vehicular de la ciudad normalmente converge en este corredor central pues allí se encuentran las vías más rápidas y directas que conectan el extremo sur con el extremo norte de la ciudad. También se encuentran allí sectores o barrios con un gran conglomerado de fábricas, empresas y comercio en general, haciendo de este corredor un gran concentrador del tráfico vehicular de la ciudad.  
+
+MUERTOS:
+
+```{r}
+color <- barrios_mue$COLOR
+barrios_mue$TAMANO <- ifelse(barrios_mue$GR_MUERTOS == grupos_mue$centers[1], 10,20)
+tamano <- barrios_mue$TAMANO
+titulo <- barrios_mue$BARRIO
+df <- data.frame(longitud, latitud, color, tamano, titulo)
+leaflet(df) %>% addTiles() %>%
+  addCircles(lng = ~longitud, lat = ~latitud, weight = 1, color=~color,
+             radius = ~tamano * 20, popup = ~titulo)
+```
+
+El mapa de muertos es quizás el mapa con una menor interpretabilidad por parte del usuario. Sin embargo, cabe resaltar aquellos puntos o barrios que son demarcados como críticos en cuánto a su proporción de accidentes que involucran muertos. Barrios como San Antonio de Prado y San Javier clasifican en este grupo quizás debido a que en barrios de estratos bajos un gran porcentaje del tráfico vehicular corresponde a motociclistas que, además de estar más expuestos a accidentes por el tipo de vehículo en el que se movilizan, son actores viales que en barrios de estratos bajos la gran mayoría no usa los elementos de seguridad adecuados para su protección como el casco. 
+
+HERIDOS:
+
+```{r}
+color <- barrios_her$COLOR
+barrios_her$TAMANO <- ifelse(barrios_her$GR_HERIDOS == grupos_her$centers[1], 10,20)
+tamano <- barrios_her$TAMANO
+titulo <- barrios_her$BARRIO
+df <- data.frame(longitud, latitud, color, tamano, titulo)
+leaflet(df) %>% addTiles() %>%
+  addCircles(lng = ~longitud, lat = ~latitud, weight = 1, color=~color,
+             radius = ~tamano * 20, popup = ~titulo)
+```
+
+En el mapa de heridos se evidencia que aquellos barrios con mayores proporciones de heridos en sus accidentes corresponden a barrios generalmente periféricos. Al igual que en el mapa de heridos, este patrón puede verse explicado, entre otros factores, por la alta proporción de motocicletas en el total de vehículos y la poca cultura ciudadana en el uso de los elementos de seguridad como el casco.
+
+ATROPELLOS:
+
+```{r}
+color <- barrios_atr$COLOR
+barrios_atr$TAMANO <- ifelse(barrios_atr$GR_ATROPELLOS == grupos_atr$centers[1], 10,20)
+tamano <- barrios_atr$TAMANO
+titulo <- barrios_atr$BARRIO
+df <- data.frame(longitud, latitud, color, tamano, titulo)
+leaflet(df) %>% addTiles() %>%
+  addCircles(lng = ~longitud, lat = ~latitud, weight = 1, color=~color,
+             radius = ~tamano * 20, popup = ~titulo)
+```
+
+En el mapa de atropellos nuevamente son los barrios periféricos aquellos datos que más información nos revelan acerca de la accidentalidad en Medellín. En este caso se puede evidenciar un aumento gradual de la proporción de atropellos en cada barrio, este aumento se da desde el corredor central de la ciudad, alrededor del río Medellín, hacia los barrios en los extremos oriental, occidental y norte de la ciudad. Un factor que puede tener incidencia en este comportamiento es el alto volumen de infracciones a las normas de tránsito que se dan en estos sectores, normas de tránsito que son de difícil regulación si se tiene en cuenta la ubicación de estos sectores y su difícil acceso.

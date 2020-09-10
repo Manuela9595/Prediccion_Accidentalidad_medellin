@@ -1,0 +1,717 @@
+---
+title: "Clustering Accidentalidad en  Medellin años 2014-2018"
+author: Manuela Londono Ocampo, Alexis Arenas Bustamante, Juan Esteban Arroyave, William Jovel Tamayo
+date: "9/9/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+# En este notebook se encuentra el análisis y procedimientos realizados para la construcción de un modelo de agrupamiento de barrios de acuerdo a los accidentes registrados en Medellín en los años 2014-2018.
+# En el modelo a desarrollar se tendrá múltiples variables como criterios para el agrupamiento
+```
+
+```{r}
+# Configuración del directorio por default
+setwd("C:/RDATA")
+#
+getwd()
+# [1] ""C:/RDATA""
+
+# Validacion de la instalación y carga de las librerías 
+if (! ("readxl" %in% rownames(installed.packages()))) { install.packages("readxl", dependencies = TRUE) } # para cargar archivos xlsx
+if (! ("dplyr" %in% rownames(installed.packages()))) { install.packages("dplyr", dependencies = TRUE) }
+if (! ("scales" %in% rownames(installed.packages()))) { install.packages("scales", dependencies = TRUE) }
+if (! ("plyr" %in% rownames(installed.packages()))) { install.packages("plyr", dependencies = TRUE) }
+if (! ("qcc" %in% rownames(installed.packages()))) { install.packages("qcc", dependencies = TRUE) }
+if (! ("ggplot2" %in% rownames(installed.packages()))) { install.packages("ggplot2", dependencies = TRUE) }
+if (! ("NbClust" %in% rownames(installed.packages()))) { install.packages("NbClust", dependencies = TRUE) }
+if (! ("car" %in% rownames(installed.packages()))) { install.packages("car", dependencies = TRUE) }
+if (! ("rgl" %in% rownames(installed.packages()))) { install.packages("rgl", dependencies = TRUE) }
+if (! ("cluster" %in% rownames(installed.packages()))) { install.packages("cluster", dependencies = TRUE) }
+if (! ("factoextra" %in% rownames(installed.packages()))) { install.packages("factoextra", dependencies = TRUE) }
+if (! ("kohonen" %in% rownames(installed.packages()))) { install.packages("kohonen", dependencies = TRUE) }
+if (! ("clustertend" %in% rownames(installed.packages()))) { install.packages("clustertend", dependencies = TRUE) }
+if (! ("seriation" %in% rownames(installed.packages()))) { install.packages("seriation", dependencies = TRUE) }
+if (! ("Hmisc" %in% rownames(installed.packages()))) { install.packages("Hmisc", dependencies = TRUE) }
+if (! ("rfm" %in% rownames(installed.packages()))) { install.packages("rfm", dependencies = TRUE) }
+if (! ("dbscan" %in% rownames(installed.packages()))) { install.packages("dbscan", dependencies = TRUE) }
+if (! ("writexl" %in% rownames(installed.packages()))) { install.packages("writexl", dependencies = TRUE) }
+if (! ("randomForest" %in% rownames(installed.packages()))) { install.packages("randomForest", dependencies = TRUE) }
+if (! ("C50" %in% rownames(installed.packages()))) { install.packages("C50", dependencies = TRUE) }
+if (! ("rpart" %in% rownames(installed.packages()))) { install.packages("rpart", dependencies = TRUE) }
+if (! ("Boruta" %in% rownames(installed.packages()))) { install.packages("Boruta", dependencies = TRUE) }
+if (! ("partykit" %in% rownames(installed.packages()))) { install.packages("partykit", dependencies = TRUE) }
+if (! ("liquidSVM" %in% rownames(installed.packages()))) { install.packages("liquidSVM", dependencies = TRUE) }
+if (! ("ggdendro" %in% rownames(installed.packages()))) { install.packages("ggdendro", dependencies = TRUE) }
+
+# Carga de librerias
+library(formattable)
+library(Boruta)
+library(rpart)
+library(randomForest)
+library(partykit)
+library(liquidSVM)
+library(writexl)
+library(car)
+library(rgl)
+library(NbClust)
+library(plyr)
+library(ggplot2)
+library(qcc)
+library(readxl)
+library(dplyr)
+library(scales)
+library(cluster)
+library(factoextra)
+library(kohonen)
+library(cluster)
+library(clustertend)
+library(seriation)
+library (Hmisc)
+library (dbscan)
+library(caret)
+library(fpc)
+library(clValid)
+library(mclust)
+library(ppclust)
+library(FactoMineR)
+library(C50)
+library(factoextra)
+library(ggdendro)
+```
+```{r}
+# lectura de los datos
+accidentes <- read_excel("C:/RDATA/Barrios_Cluster.xlsx")
+
+
+# Visualizar estructura de datos
+head(accidentes)
+
+# Nombre de las columnas
+colnames(accidentes)
+
+# Definición de las variables
+# Barrio = Nombre del barrio
+# Comuna = Nombre de la comuna
+# Coordenadas
+# LONGITUD_BARRIO = Longitud Barrio
+# LATITUD_BARRIO = Latitud Barrio
+
+# accidentes$Cant.Enero = Cantidad acumulada de accidentes en Enero de 2014-2018
+# accidentes$Cant.Febrero = Cantidad acumulada de accidentes en febrero de 2014-2018
+# accidentes$Cant.Marzo = Cantidad acumulada de accidentes en Marzo de 2014-2018
+# accidentes$Cant.Abril = Cantidad acumulada de accidentes en Abril de 2014-2018
+# accidentes$Cant.Mayo = Cantidad acumulada de accidentes en Mayo de 2014-2018
+# accidentes$Cant.Junio = Cantidad acumulada de accidentes en Junio de 2014-2018
+# accidentes$Cant.Julio = Cantidad acumulada de accidentes en Julio de 2014-2018
+# accidentes$Cant.Agosto = Cantidad acumulada de accidentes en Agosto de 2014-2018
+# accidentes$Cant.Septiembre = Cantidad acumulada de accidentes en septiembre de 2014-2018
+# accidentes$Cant.Octubre = Cantidad acumulada de accidentes en Octubre de 2014-2018
+# accidentes$Cant.Noviembre = Cantidad acumulada de accidentes en Noviembre de 2014-2018
+# accidentes$Cant.Diciembre = Cantidad acumulada de accidentes en Diciembre de 2014-2018
+# accidentes$Cant.LunesAViernes = Cantidad acumulada de accidentes en dias laborales de 2014-2018
+# accidentes$Cant.SabadoYDomingo = Cantidad acumulada de accidentes fines de semana de 2014-2018
+
+# Promedio de Accidentes por día entre 2014 y 2018
+# Prom.Lunes
+# Prom.Martes
+# Prom.Miercoles
+# Prom.Jueves
+# Prom.Viernes         
+# Prom.Sabado
+# Prom.Domingo
+# Cant.Herido
+# Cant.Muerto
+# Cant.Solodaños 
+
+# Cantidad acumulada de Accidentes por clase entre 2014 y 2018
+# Cant.Atropello
+# Cant.CaidadeOcupante
+# Cant.Choque
+# Cant.ChoqueyAtropello
+# Cant.Incendio
+# Cant.Otro
+# Cant.Volcamiento
+
+# Cantidad acumulada de Accidentes por Gravedad entre 2014 y 2018
+# Cant.Herido = Cantidad de accidientes con heridos
+# Cant.Muerto = Cantidad de accidientes con Muertos
+# Cant.Solodaños = Cantidad de accidentes con solo daños
+
+
+
+# accidentesmes.df<-accidentes[,c(7,8,9,10,11,12,13,14,15,16,17,18)]
+# colnames(accidentesmes.df)
+
+
+# Explorar estructura de datos
+
+class(accidentes)
+str(accidentes)
+describe(accidentes)
+summary(accidentes)
+```
+```{r}
+colnames(accidentes)
+accidentes.numericas<-accidentes[,-c(1,2,3,4)]
+head(accidentes.numericas)
+colnames(accidentes.numericas)
+dim(accidentes.numericas)
+class(accidentes.numericas)
+str(accidentes.numericas)
+summary(accidentes.numericas)
+```
+
+```{r}
+# Análisis de correlación entre las variables
+cor(accidentes.numericas)
+```
+```{r}
+# Normalización de variables numéricas
+Accidentes_VariablesNormalizadas <- scale(accidentes.numericas)
+head(Accidentes_VariablesNormalizadas)
+class(Accidentes_VariablesNormalizadas)
+
+# convertimos a dataframe
+Accidentes_VariablesNormalizadas<-as.data.frame(Accidentes_VariablesNormalizadas)
+class(Accidentes_VariablesNormalizadas)
+
+
+desc_stats <- data.frame(
+  Min = apply(Accidentes_VariablesNormalizadas, 2, min), # minimo
+  Med = apply(Accidentes_VariablesNormalizadas, 2, median), # mediana
+  Mean = apply(Accidentes_VariablesNormalizadas, 2, mean), # media
+  SD = apply(Accidentes_VariablesNormalizadas, 2, sd), # desviación estandar
+  Max = apply(Accidentes_VariablesNormalizadas, 2, max) # Máximo
+)
+
+desc_stats <- round(desc_stats, 1)
+head(desc_stats)
+
+```
+
+
+```{r}
+# Segmentacion Por múltiples métodos de Clustering
+
+# Tenemos que seleccionar un k para el número de clusters:
+
+colnames(Accidentes_VariablesNormalizadas)
+
+# Creamos un dataset con el conjunto de datos que vamos a trabajar el clustering
+
+preprocessed <- as.data.frame(Accidentes_VariablesNormalizadas)
+head(preprocessed)
+class(preprocessed)
+
+
+# Determinar si es posible hacer agrupamiento de datos usando el esadistico de hopkins
+# Un valor menor a 0.5 indica que si es clusterware
+# un valor mayor a 0.5, es una distribución normal
+
+set.seed(123)
+hopkins(preprocessed, n=nrow(preprocessed)-1)
+# como el valor obtenido es menor a 0.5, se puede concluir que el conjunto de datos si es agrupable
+
+
+# matrix de distancias
+
+distancia <-dist(preprocessed, method="euclidean") 
+head(distancia)
+
+# matriz de disimilitudes usando la funcion get_dist()
+
+res.dist <- get_dist(preprocessed, stand = TRUE, method = "pearson") 
+
+# representa la matriz de disimilitudes en un mapa de calor que permite ver si hay tendencia de agrupamiento
+
+fviz_dist(distancia, show_labels=FALSE)
+
+fviz_dist(res.dist,
+          gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+# analizando las graficos de mapa de calor de la matriz de disimiliridad se puede confirmar que si hay tendencia de agrupamiento
+
+# Tambien se puede utilizar la representación de las instancias en los ejes de los dos primeros componentes principales
+# como una alternativa visual para detectar tendencia de agrupamiento
+
+fviz_pca_ind(prcomp(preprocessed),title="componentes principales", geom="point")
+# se puede observar agrupaciones
+
+```
+```{r}
+# Determinacion del número óptimo de cluster
+# - usando  el metodo del codo
+
+
+fviz_nbclust(preprocessed, kmeans, method = "wss")+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+# marcando numero de grupos =3
+
+fviz_nbclust(preprocessed, kmeans, method = "wss")+ geom_vline(xintercept=3, linetype=2)+ labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Elbow\"")
+
+
+# A partir de la curva obtenida podemos ver cómo a medida que se aumenta la cantidad de centroides, el valor de WCSS 
+# disminuye de tal forma que la gráfica adopta una forma de codo. 
+# Para seleccionar el valor óptimo de k, se escoje entonces ese punto en donde ya no se dejan de producir variaciones 
+# importantes del valor de WCSS al aumentar k. En este caso, vemos que esto se produce a partir de k >= 3, 
+
+# De este primer análisis tomaremos k= 3 para el número de agrupaciones
+
+# - usando  el método del coeficiente de silhouette
+
+fviz_nbclust(preprocessed, kmeans, method = "silhouette")+  labs(title="Número óptimo de agrupaciones", Subtitle="Método \"Silhouette\"")
+
+# De este segundo análisis son candidatos el seleccionar 2 el número de agrupaciones
+
+
+# Determinacion del número de cluster usando estadistico gap
+
+fviz_nbclust(preprocessed, kmeans, nstart=2, method = "gap_stat", nboot=50)+ labs(title="Número óptimo de agrupaciones", Subtitle="Método del estadístico \"Gap\"")
+
+# De este tercer análisis la recomendación seria 4 grupos
+
+
+# ++++++++++++++++++++++++
+# Determinacion del número de cluster usando Metodo PAM
+fviz_nbclust(preprocessed, pam, method = "silhouette") 
+
+# De este cuarto análisis es candidato el seleccionar 2 ó incluso 3 para el número de agrupaciones
+
+
+# ++++++++++++++++++++++++
+# Determinacion del número de cluster para el algoritmo clara y el algoritmo pam
+# La función pamk() del paquete fpc , permite evaluar el número óptimo de clúster para el algoritmo clara y el algoritmo pam.
+
+
+pamk(preprocessed, krange=2:10, criterion="multiasw", usepam=FALSE)
+
+pamk(preprocessed, krange=2:10, criterion="multiasw", usepam=TRUE)
+
+# De este quinto  análisis se recomienda 2 para el número de agrupaciones
+
+
+# Otro método para Determinar el número de cluster para los algoritmos: kmeans","pam","clara", "som"
+
+intern <- clValid(preprocessed, nClust=2:10, clMethods = c("kmeans","pam","clara" ),validation = "internal", maxitems = 600)
+# Summary
+summary(intern)
+optimalScores(intern)
+plot(intern)
+
+# De este otro análisis se sugiere 3 agrupaciones
+
+# Luego de Analizar los resultados de las diferentes técnicas tomaremos  3 grupos ( k=3)
+```
+
+
+```{r}
+# Realizaremos un primer agrupamiento de tipo Jerarquico
+
+## Agrupamiento Jerarquico usando la libreria hclust
+# ++++++++++++++++++++++++
+
+clus_hc <- hclust(distancia, method="ward.D2")
+ggdendrogram(clus_hc, rotate = FALSE, labels = FALSE, theme_dendro = TRUE) + 
+  labs(title = "Dendograma")
+
+
+dendrogram <- hclust(distancia, method = 'ward.D')
+ggdendrogram(dendrogram, rotate = FALSE, labels = FALSE, theme_dendro = TRUE) + 
+  labs(title = "Dendograma")
+
+
+# En el eje horizontal del dendrograma tenemos cada uno de los datos que componen el conjunto de entrada, 
+# mientras que en el eje vertical se representa la distancia euclídea que existe entre cada grupo a medida 
+# que éstos se van jerarquizando. Cada línea vertical del diagrama representa un agrupamiento que coincide con los puntos 
+# arropados por ésta, y como se ve en el dendrograma, estos van formándose progresivamente hasta tener un solo gran grupo 
+# determinado por la línea horizontal superior. A
+
+# Así, para nuestros datos, veamos los resultados para k = 3, .
+# A fin de obtener los resultados del agrupamiento, se hace uso de la función cutree, incorporando como parámetro tanto 
+# el modelo de agrupamiento como la cantidad de clases k:
+
+# Se crearan tres grupos ( k=3)
+grupos_hc3 <- cutree(clus_hc, k = 3) # se almacena las etiquetas
+
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+
+accidentes <- cbind(accidentes, cluster_hc = grupos_hc3)
+
+```
+```{r}
+# Guardamos los resultados del cluster
+
+# ++++++++++++++++++++++++
+# otra forma de hacer el agrupamiento jerarquico con hcut()  
+res <- hcut(preprocessed, k = 3, stand = TRUE)
+res$size
+
+# Visualizamos
+fviz_dend(res, rect = TRUE, cex = 0.5,
+          k_colors = c("#00AFBB","#2E9FDF", "#E7B800"))
+
+# Visualización cluster
+fviz_cluster(res, ellipse.type = "convex")
+fviz_silhouette(res)
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método  
+accidentes <- cbind(accidentes, cluster_hcut3 = res$cluster)
+
+
+```
+```{r}
+# Modelo de Enhanced hierarchical clustering, con tres grupos -- Usando eclust
+# +++++++++++++++++++++
+res.hc <- eclust(preprocessed, "hclust", k = 3, graph = FALSE)
+print(res.hc$size) # tamaño del cluster
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes <- cbind(accidentes, cluster_enhHcut3 = res.hc$cluster)
+
+# Visualizamos
+
+fviz_dend(res.hc, rect = TRUE, show_labels = FALSE)
+fviz_cluster(res.hc, ellipse.type = "convex")
+fviz_cluster(res.hc, ellipse.type = "convex", palette="jco", labelsize = 8)
+
+# Visualize the silhouette plot
+fviz_silhouette(res.hc)
+fviz_silhouette(res.hc, palette="jco")
+
+```
+```{r}
+## Clustering por  K-means
+# Agrupamiento por K-Medios (K-Means Clustering)
+# El método de K-Medios basa su funcionamiento en agrupar los datos de entrada en un total de k conjuntos definidos por un
+# centroide, cuya distancia con los puntos que pertenecen a cada uno de los datos es la menor posible. 
+# En términos generales, el algoritmo puede resumirse como:
+# Definir un total de k centroides al azar.
+# Calcular las distancias de cada uno de los puntos de entrada a los k centroides, y asignar cada punto al centroide 
+# cuya distancia sea menor.
+# Actualizar la posición de los k centroides, calculando la posición promedio de todos los puntos que pertenecen a cada clase.
+# Repetir los pasos 2 y 3 hasta que los centroides no cambien de posición y, por lo tanto, las asignaciones de puntos entre clases no cambie.
+# Sin embargo, la cantidad óptima de centroides k a utilizar no necesariamente se conoce de antemano, por lo que es necesario aplicar 
+# una técnica conocida como el Método del Codo o Elbow Method a fin de determinar dicho valor.
+# Básicamente, este método busca seleccionar la cantidad ideal de grupos a partir de la optimización de la WCSS (Within Clusters Summed Squares).
+
+# La función kmeans recibe dos parametros: datos (solo las variables numericas) y k (número de grupos a formar).
+
+set.seed(1234)
+kmeansb <- kmeans(preprocessed, 3,iter.max = 1000, nstart=25)
+# iter.max son el máximo de iteraciones a aplicar al algoritmo, y nstart es la cantidad de conjuntos de 
+# centroides que emplea internamente el mismo para ejecutar sus cálculos.
+
+kmeansb
+str(kmeansb)
+
+# Con la siguiente sentencia se obtiene el grupo al cual pertenecen los registros o filas del set de datos según la función: kmeans .
+kmeansb$cluster
+class(kmeansb)
+kmeansb$size # cantidad por grupo
+print(kmeansb$centers) # centroides
+
+# Visualize kmeans clustering
+fviz_cluster(kmeansb, data = preprocessed, ellipse.type = "convex", ellipse = TRUE)
+fviz_cluster(kmeansb, data = preprocessed, ellipse.type = "norm", ellipse = TRUE) # variacion del ellise.type
+
+# Visualizacion Show points only
+fviz_cluster(kmeansb, data = preprocessed, geom = "point")
+# Visualizacion Show text only
+fviz_cluster(kmeansb, data = preprocessed, geom = "text")
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes <- cbind(accidentes, cluster_KM3 = kmeansb$cluster)
+
+```
+```{r}
+#  PAM clustering
+# +++++++++++++++++++++
+
+pam.res <- pam(preprocessed, 3)
+print(pam.res$medoids)
+print(pam.res$clusinfo)
+
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes <- cbind(accidentes, cluster_pam3 = pam.res$clustering)
+
+# Visualize pam clustering
+fviz_cluster(pam.res, geom = "point", ellipse.type = "norm")
+fviz_cluster(pam.res, geom = "point", ellipse.type = "convex")
+clusplot(pam.res)
+fviz_silhouette(pam.res)
+
+
+```
+# Se oserva de la grafica de Silhouette que algunos barrios quedaron mal agrupados ( valores negativos en el grupo 2 y 3 )
+```{r}
+## Clara clustering, con 3 grupos --
+# +++++++++++++++++++++
+clarax <- clara(preprocessed, 3)
+
+# información de los cluster
+clarax$clusinfo
+
+
+# datos de los Medoids escalados
+clarax$medoids
+
+# Cluster plot
+fviz_cluster(clarax, stand = T, geom = "point",
+             pointsize = 1)
+
+plot(silhouette(clarax),  col = 2:3, main = "Silhouette plot")
+
+fviz_cluster(clarax, ellipse.type = "convex")
+fviz_cluster(clarax)
+
+fviz_silhouette(clarax)
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes <- cbind(accidentes, cluster_clara3 = clarax$clustering)
+
+```
+# Se oserva de la grafica de Silhouette que algunos barrios quedaron mal agrupados ( valores negativos en el grupo 2 )
+```{r}
+##  EM clustering - Otra técnica de clustering
+# +++++++++++++++++++++
+
+em.res <- Mclust(preprocessed, 3)
+summary(em.res)
+
+fviz_mclust(em.res, "BIC", ellipse.tye="ellipse", palette="jco")
+
+fviz_mclust(em.res, "classification", geom="point", palette="jco")
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes<- cbind(accidentes, cluster_em3 = em.res$classification)
+```
+
+
+```{r}
+#+++++++++++++++++++++
+##  Fuzzy clustering
+# +++++++++++++++++++++
+
+res_FCM<-fcm(preprocessed, centers=3, nstart=5)
+round(head(res_FCM$u),3)
+
+res_FCM<-ppclust2(res_FCM, "kmeans")
+
+fviz_cluster(res_FCM, data=preprocessed, ellipse=TRUE, geom="point", palette="jco")
+
+print(res_FCM$centers)
+
+print(res_FCM$size)
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes <- cbind(accidentes, cluster_FCM3 = res_FCM$cluster)
+
+```
+```{r}
+# clustering por Dbscan
+dbscan::kNNdistplot(preprocessed, k=5)
+abline(h=3, lty=2)
+
+res_DBSCAN<- fpc::dbscan(preprocessed, eps=3, MinPts=5) # el  número de puntos para el cluster 5 
+print(res_DBSCAN)
+fviz_cluster(res_DBSCAN, data=preprocessed, ellipse.type = "True", geom="point", palette="jco")
+fviz_cluster(res_DBSCAN, data=preprocessed, ellipse = TRUE, geom="point", palette="jco")
+fviz_cluster(res_DBSCAN, data=preprocessed, ellipse = TRUE, geom="point", palette="jco", show.clust.cent = TRUE, ellipse.type = "convex")
+
+# De este modelo de agrupamiento se recomendaría tres grupos
+# los puntos negros son considerados atipicos por este metodo
+
+# Etiquetamos y adicionamos una columna con las etiquetas de acuerdo a este método 
+accidentes <- cbind(accidentes, cluster_DBSCAN3 = res_DBSCAN$cluster)
+```
+```{r}
+res_PCA<- PCA(preprocessed, ncp=3, graph=FALSE)
+res_HCPC<- HCPC(res_PCA, graph=FALSE)
+plot(res_HCPC, choice= "3D.map")
+
+fviz_cluster(res_HCPC, ellipse.type="convex", palette="jco", labelsize = 8)
+
+```
+
+```{r}
+# Validacion de los agrupamientos
+
+# Almacenamos las métricas del agrupamiento obtenido por  la técnica de K-means
+
+res_statsKmeans <- cluster.stats(distancia, kmeansb$cluster)
+res_statsKmeans
+
+# Almacenamos las métricas del agrupamiento obtenido por la técnica de Fuzzy c-means
+
+res_statsFCM <- cluster.stats(distancia, res_FCM$cluster)
+res_statsFCM 
+
+# Almacenamos las métricas del agrupamiento obtenido por la técnica de EM
+res_statsem <- cluster.stats(distancia, em.res$classification)
+res_statsem
+
+# Almacenamos las métricas del agrupamiento obtenido por la técnica de Clara
+res_statsClara <- cluster.stats(distancia, clarax$clustering)
+res_statsClara
+
+# Almacenamos las métricas del agrupamiento obtenido por la técnica de PAM
+res_statspam <- cluster.stats(distancia, pam.res$clustering)
+res_statspam
+
+# Almacenamos las métricas del agrupamiento jerarquico
+res_statshc <- cluster.stats(distancia, res.hc$cluster)
+res_statshc
+
+# Almacenamos las métricas del agrupamiento obtenido por DBSCAN
+res_statsDBSCAN <- cluster.stats(distancia, res_DBSCAN$cluster)
+res_statsDBSCAN
+
+# Almacenamos las métricas del agrupamiento obtenido por HCPC
+res_statsHCPC<- cluster.stats(distancia, as.integer(res_HCPC$data.clust$clust))
+res_statsHCPC
+
+# Guardamos los datos anteriores en un dataframe
+clustervalidacion <- as.data.frame(cbind(res_statsKmeans, res_statsFCM, res_statsem, res_statsClara, res_statspam, res_statshc,res_statsDBSCAN))
+
+
+write_xlsx(clustervalidacion,"C:\\RDATA\\ClusterValidacionbarriosR.xlsx")
+write_xlsx(accidentes,"C:\\RDATA\\BarriosyAccidentesEtiquetados.xlsx")
+```
+
+
+```{r}
+COMPARA_CLUS <-data.frame(res_statsKmeans$avg.silwidth, res_statsKmeans$dunn, res_statsKmeans$sindex, res_statsKmeans$wb.ratio,res_statsKmeans$ch, row.names="K-MEANS")
+
+colnames(COMPARA_CLUS) <- c("SIL","DUNN", "SEP","WB","CH")
+
+add_resultado<-function(dfcompara, vector_clases,nombre){
+  res_stats <- cluster.stats(distancia, vector_clases)
+  
+  dfcompara<- rbind(dfcompara, c(res_stats$avg.sildwitdth, res_stats$dunn, res_stats$index, res_stats$wb.ratio))
+  
+  row.names(dfcompara)[nrow(dfcompara)]<- nombre
+  return(dfcompara)
+}
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, res_FCM$cluster, "FCM")
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, em.res$classification, "EM")
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, clarax$clustering, "CLARA")
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, pam.res$clustering, "PAM")
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, res.hc$cluster, "HC")
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, res_DBSCAN$cluster, "DBSCAN")
+COMPARA_CLUS<-add_resultado(COMPARA_CLUS, as.integer(res_HCPC$data.clust$clust), "HCPC")
+```
+
+
+```{r}
+# tabla comparativa de los cluster
+print(formattable(COMPARA_CLUS[order(COMPARA_CLUS[,1],decreasing=TRUE),],digits=2, format="f", row.names=TRUE, list(SIL=color_tile("red","green"),DUNN=color_tile("green","red"), SEP=color_tile("red", "green"),WB=color_tile("green","red"),CH=color_tile("green","red"))))                                                                                                                                                                                            
+```
+```{r}
+# según las metricas de Sillouethe y DUNN , el mejor agrupamiento se obtuvo con K-means
+
+# columnas totales con las etiquetas de pertenencia a un cluster para las diferentes tecnicas
+colnames(accidentes)
+```
+
+
+```{r}
+
+BarriosYAccidentes<-accidentes[,-c(1,2,3,4,36,37,38,40,41,42,43,44)]
+print(colnames(BarriosYAccidentes))
+BarriosYAccidentes$cluster_KM3<-as.factor(BarriosYAccidentes$cluster_KM3)
+```
+```{r}
+# analizando el modelo de agrupamiento obtenido utlizando clasificacion usando Arboles 
+# Esto permitirá identificar cuales fueron las variables que incidieron en la obtención de los grupos
+
+modelo.rpart<- rpart(cluster_KM3 ~ ., data=BarriosYAccidentes, method="class")
+par(mar=c(0,0,0,0))
+plot(modelo.rpart)
+text(modelo.rpart, cex=0.75)
+summary(modelo.rpart)
+modelo.rpart$variable.importance
+modelo.rpart$frame
+plotcp(modelo.rpart)
+```
+
+
+```{r}
+# c5
+modelo.c50<- C5.0(cluster_KM3 ~ ., data=BarriosYAccidentes)
+par(mar=c(0,0,0,0))
+```
+
+
+```{r}
+plot(modelo.c50)
+summary(modelo.c50)
+summary(C5.0(cluster_KM3 ~ ., data=BarriosYAccidentes, rules=TRUE))
+```
+
+
+```{r}
+#Boosting
+
+modelo.c50boost<- C5.0(cluster_KM3 ~ ., data=BarriosYAccidentes, trials=100)
+plot(modelo.c50boost)
+
+
+```
+
+
+```{r}
+# analizando el modelo de agrupamiento obtenido utlizando clasificacion usando Random Forest
+
+set.seed(111)
+
+modelo.RF<-randomForest(cluster_KM3 ~ ., data=BarriosYAccidentes, ntree=100, importance=T)
+plot(modelo.RF)
+print(modelo.RF$importance)
+varImpPlot(modelo.RF)
+
+# fin
+```
+```{r}
+# Interpretación de los agrupamientos obtenidos:
+
+# Cluster 1 : Barrios con alta accidentalidad los fines de semana y con mayor número de accidentes en enero. 
+# es el segundo grupo donde mas muertos por accidente se presentan. 
+# La consideramos como Zona de riesgo Medio
+
+# Cluster 2 : Barrios con alto nivel de accidentalidad durante toda la semana, pero con menor número de accidentes en enero y abril.
+# Son los barrios con menor promedio de muertos por accidente
+# La consideramos como Zona de riesgo Bajo.
+
+# Cluster 3: Son Barrios con la mayor accidentalidad los fines de semana, con mayor proporción de muertes, mayor proporción de heridos.
+# mayor proporción de accidentes con solo daños, con mayor número de accidentes en abril. 
+# La consideramos como Zona de riesgo alto. 
+
+```
+
+
+```{r}
+# Con los agrupamientos obtenido se procede a presentarlos en un mapa el cual se publica en la dirección:
+# https://william-jovel.shinyapps.io/Accidentes/
+```
+
+
+```{r}
+# Bibliografia
+# An Introduction to Statistical Learning: with Applications in R (Springer Texts in Statistics)
+# https://www.r-graph-gallery.com/dendrogram/
+# https://www.r-graph-gallery.com/336-interactive-dendrogram-with-collapsibletree/
+# https://www.analyticsvidhya.com/blog/2016/11/an-introduction-to-clustering-and-different-methods-of-clustering/
+
+```
