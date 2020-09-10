@@ -1,0 +1,1068 @@
+---
+title: "**Informe Técnico: Predicción de la accidentalidad vial de la cuidad de Medellín**<br>"
+
+author: "*Alexis A. Arenas Bustamante, Juan E. Arroyave Duque, William A. Jovel Tamayo, Manuela Londoño Ocampo.* <br> Curso de Analítica Predictiva <br> Universidad Nacional de Colombia <br> Facultad de Minas <br> Medellín"
+date: "Septiembre de 2019"
+
+output:
+  html_document:
+    theme: cosmo
+    highlight: haddock
+    number_sections: true
+    df_print: paged
+    toc: true
+    toc_float:
+      collapsed: True
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r setup, include=FALSE}
+library(dplyr) # data wrangling
+library(ranger)
+library(caret)
+library(corrplot)
+library(rsample)     # data splitting 
+library(rpart)       # performing regression trees
+library(rpart.plot)  # plotting regression trees
+library(ipred)       # bagging
+require(MASS)
+library(randomForest)
+library(tidyverse)
+library(ggpubr)
+```
+
+# **Introducción**
+
+En el siguiente Notebook se encuentran los análisis y pasos realizados en la construcción de modelos predictivos para la accidentalidad vial dentro de la ciudad de Medellín. Los modelos presentados estarán divididos según la temporalidad de predicción y la gravedad del accidente. 
+
+Los datos usado corresponden a **datos abiertos de Medellín** disponibles en el sitio web MEDATA. Se toman como datos de entrenamiento los registros de accidentalidad ocurridos entre el año 2014 y 2018.
+
+Con las técnicas de predicción y agrupamiento aplicadas se busca:
+
+1. Predecir la accidentalidad vial por tipo de accidente
+
+2. Agrupar los barrio de medellín, según su accidentalidad.
+
+El informe técnico resumirá cada uno de los análisis aplicados, en cada sesión del Notebook se encontraran enlaces a recursos mas específicos, según corresponda.
+
+
+# **Pre procesamiento de los datos**
+
+Primero se aplicaron algunas tareas de integración y posteriormente de limpieza sobre los datos obtenidos del portal de [MEDATA](http://medata.gov.co/dataset/accidentalidad). La base de datos usada es el resultado de consolidar cada una de las bases de datos anuales a la que se tuvo acceso, en una sola base de datos.
+
+```{r, echo=FALSE}
+dataset_original <- read.csv("~/Downloads/2014-2018 (2).csv", sep=";")
+head(dataset_original)
+```
+
+Inicialmente se contaba con `r dim(dataset_original)[1]` filas y `r dim(dataset_original)[2]` columnas, después del análisis de cada una, se opta por eliminar 9 columnas que presentaban datos muy similares (constantes) o no aportaban datos relevantes para el presente trabajo. Una vez definidas las variables de interés, se procede a evaluar si alguna de estas variables tiene datos ausentes.
+
+```{r}
+dataset_original  <- dplyr :: select(dataset_original, -OBJECTID,-X, -Y, -DIRECCION_ENC, 
+                                     -DIRECCION, -CBML, -TIPO_GEOCOD, -X_MAGNAMED, -Y_MAGNAMED)
+
+summary(dataset_original)
+```
+
+## **Tratamiento de Missing**
+
+```{r, echo=FALSE}
+Variable <- c("CBML", "BARRIO", "COMUNA")
+Faltantes <- c("8.64%","8,64%" , "8.63%")
+ 
+Missing_df <- data.frame(Variable, Faltantes)
+
+Missing_df
+```
+
+En el **summary** anterior se pueden observar algunos valores en 0 en la columna Barrio, estos son indicios de que el data set presenta columnas con datos ausentes. Al analizar independiente cada columna, se identificó que CBML, BARRIO y COMUNA son aquellas que tienen un porcentaje de datos ausentes mayor. 
+
+Dado que los barrios harán parte del agrupamiento propuesto y con el animo de recuperar la mayor cantidad de registros de accidentes, se filtró de esta columna, todos aquellos valores faltantes y que a su vez tenían asociada una dirección. Luego, en la pagina de [Mapas Medellin](https://www.medellin.gov.co/MAPGISV5_WEB/mapa.jsp?aplicacion=0) se cargó un archivo en formato *xlsx* que únicamente tenía cargada la columna con las direcciones; el sitio procesó el documento y devolvió los nombres de los barrios para cada dirección y esta nueva información fue incorporada al archivo base.
+
+```{r, echo = FALSE}
+datos_final <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/datos_final.csv")
+
+head(datos_final)
+```
+
+Los barrios con registro pasaron de 208,868 a 214,797. Los registros que no pudieron recuperarse fueron eliminados del análisis, así como algunos en los su nomenclatura indicaban un error. Para las columna de diseño y clase, cuyos valores nulos no superaban los 200 registros, se opto por la imputación usando la moda. También se identificó datos erróneos en los barrios y comunas, dichos datos fueron descartados, dado que representan información no confiable. 
+
+Se creó la variable derivada semana para completar la temporalidad a la que se debe tener acceso para los modelo predictivos que se modelarán posteriormente. El dataset final después de la limpieza y homologan de datos, esta compuesto por `r dim(datos_final)[1]` filas y `r dim(datos_final)[2]` Columnas.
+
+# **Análisis Descriptivo**
+
+Para la predicción se definieron 3 tipo de accidentes a modelar: 
+- accidentes con solo daños
+- accidentes con heridos 
+- accidentes con muertos.
+
+## **Tipos de accidente**
+
+Como se puede observar existen 3 clases de accidentes que indican el nivel de gravedad del evento. La mayoría de los accidentes ocurridos en el periodo de tiempo analizado tuvieron heridos y en muy pocos hubo muertos, aquí se observa un desbalanceo de clases que puede influir en los resultados de los modelos propuestos, dado que para el caso de los accidentes con muertos, las datos disponibles son muy pocos en comparación con los otros tipo de accidentes y esto dificulta el entrenamiento de los mismos.
+
+```{r, echo= FALSE, warning= FALSE}
+ggplot(data = datos_final) +
+  geom_bar(mapping = aes(as.factor(GRAVEDAD), position = "dodge", fill = as.factor(GRAVEDAD))) +
+  xlab("Gravedad de los accidentes") + ylab("Número de Accidentes") +
+  scale_fill_brewer(palette = "Set2") + theme_classic() +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle("Accidentes viales por gravedad") +
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+
+```
+
+## **Accidentes por Año**
+
+En el año 2016 se presentaron mas accidentes viales en la cuidad de medellin en comparación con los demás años. Aunque la variación entre periodo no es muy amplia, en la siguiente gráfica se puede observar que la tendencia empieza a decrecer a partir del año 2017 de manera leve. Esto hace que no se tenga un patrón de tendencia muy marcado, lo que podría influir en que los modelos presenten problemas de sobre-entrenamiento, puesto que la validación se realizará con los datos disponibles para el año 2018.
+
+```{r, echo= FALSE, warning= FALSE}
+ggplot(data = datos_final) +
+  geom_bar(mapping = aes(x=PERIODO, position = "dodge"), fill = "#9999CC") +
+  xlab("Año") + ylab("Número de Accidentes") +
+  scale_fill_brewer(palette = "Pastel1") + theme_classic() +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle("Accidentes viales Anuales") +
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+
+```
+
+## **Accidentes por mes**
+
+Se puede observar que los meses con menor cantidad de accidentes son enero, abril, junio y noviembre. Es posible que exista una relación entre los meses y la cantidad de eventos festivos, como semana santa en el mes de abril, donde muchas personas salen de la cuidad y por tanto hay menor circulación de vehículos, lo mismo ocurre con los meses de enero y junio que son meses típicos para vacacionar.
+
+```{r, echo= FALSE, warning= FALSE}
+ggplot(data = datos_final) +
+  geom_bar(mapping = aes(as.factor(MES), position = "dodge"), fill = "#9999CC") +
+  xlab("Mes") + ylab("Número de Accidentes") +
+  theme_classic() +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle("Accidentes viales Mensuales") +
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+
+```
+
+También se observa que hay picos de accidentes en los meses marzo, mayo y agosto. Se cree que estas variables serán significativas para los modelos propuestos.
+
+## **Accidentes por Semana**
+
+```{r, echo= FALSE, warning= FALSE, fig.height=3}
+ggplot(data = datos_final) +
+  geom_bar(mapping = aes(as.factor(SEMANA), position = "dodge"), fill = "#9999CC") +
+  xlab("Mes") + ylab("Número de Accidentes") +
+  theme_classic() +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle("Accidentes viales semanales") +
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+
+```
+
+Aquí se puede observar de manera mas granular la ocurrencia de accidentes viales en la cuidad de medellin. Es destacable que algunas variables tienen decrecimientos en la cantidad de accidentes y su influencia sobre la variable dependiente, que en este caso es al cantidad de accidentes ocurridos, puede ser significativa; lo mismo puede suceder con las semanas donde se alcancen picos altos de accidentalidad.
+
+## **Inclusión de variables: Fechas especiales / festivos** {.tabset .tabset-fade .tabset-pills}
+
+Se introdujeron al análisis diferentes variables indicadoras relacionadas con días festivos, eventos de importante concurrencia en la cuidad y fechas especiales. Entre las principales variables adicionadas se presentan tres: 
+
+**FESTIVOS** : Indica si un día es festivo (FESTIVO = 1) o no (FESTIVO = 0).
+
+**SEMANA_SANTA** : Indica si el día se encuentra en la semana en que se celebra semana santa en Colombia (SEMANA_SANTA = 1) o no (SEMANA_SANTA = 0).
+
+**FERIA_FLORES**: Indica si el día se encuentra en la semana en que se celebra feria de flores en Medellín (FERIA_FLORES = 1) o no (FERIA_FLORES = 0).
+
+
+### **Accidentes en días festivos**
+```{r, include = FALSE}
+dataset_1 <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/Datasets/dataset_1.csv", sep=";")
+
+dataset_g <-  dataset_1 %>%
+  group_by(PERIODO,MES,DIA,DIA_NOMBRE,FESTIVOS,FERIA_FLORES,SEMANA_SANTA,GRAVEDAD) %>%
+  summarize(total_accidentes=n())
+
+```
+
+Se puede observar que la cantidad de accidentes es mayor para los días que no son festivos dado que su distribución es mayor, por su parte los días festivos presentan una media menor.
+
+```{r, echo= FALSE, warning= FALSE}
+ggplot(data = dataset_g, aes(as.factor(x = FESTIVOS), y = total_accidentes)) + 
+  geom_jitter(size = 1, color = 'gray', alpha = 0.5) +
+  geom_violin(aes(fill = as.factor(FESTIVOS)), color = 'black', alpha = 0.8) +
+  xlab('Día Festivo') + 
+  ylab('Numero de accidentes') +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle('Número de accidentes ocurridos en día festivo') + 
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+```
+
+### **Accidentes en Semana Santa**
+
+```{r, echo= FALSE, warning= FALSE}
+ggplot(data = dataset_g, aes(as.factor(x = SEMANA_SANTA), y = total_accidentes)) + 
+  geom_jitter(size = 1, color = 'gray', alpha = 0.5) +
+  geom_violin(aes(fill = as.factor(SEMANA_SANTA)), color = 'black', alpha = 0.8) +
+  xlab('Semana Santa') + 
+  ylab('Numero de accidentes') +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle('Número de accidentes ocurridos en Semana Santa') + 
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+```
+
+De manera similar es posible afirmar que la cantidad de accidentes ocurridos en Semana Santa es menor en comparación con los demás días del año. 
+
+### **Accidentes en Feria de Flores**
+
+```{r, echo= FALSE, warning= FALSE}
+ggplot(data = dataset_g, aes(as.factor(x = FERIA_FLORES), y = total_accidentes)) + 
+  geom_jitter(size = 1, color = 'gray', alpha = 0.5) +
+  geom_violin(aes(fill = as.factor(FERIA_FLORES)), color = 'black', alpha = 0.8) +
+  xlab('Feria de Flores') + 
+  ylab('Numero de accidentes') +
+  theme(legend.title=element_blank()) +
+  theme (text = element_text(size=10)) +
+  ggtitle('Número de accidentes ocurridos en Feria de Flores') + 
+  theme(plot.title = element_text(hjust = 0.5, face="bold"))
+```
+
+Para los días en los que se celebra feria de flores, podemos observar que su distribución es mayor en comparación con las variables anteriormente expuestas. Estos días de mayor actividad en la cuidad pueden influir en que la tasa de accidentalidad para el mes de agosto sea mayor que la de otros meses.
+
+# **Preparación de conjuntos de datos** {.tabset .tabset-fade .tabset-pills}
+
+Como se explico anteriormente, se pretende modelar la accidentalidad vial de la cuidad de Medellín por tipo de gravedad de manera mensual, semanal y diaria. En total se proponen nueve modelos.
+
+Para cada uno de ellos se evaluó la relevancia de las variables incluidas, considerando la precisión obtenida en el proceso de validación cruzada. Para cada modelo se presentan las variables usadas en el proceso de moderación:
+
+## **Modelos Mensuales**
+
+### **Dataset del modelo mensual: Solo daños**
+
+```{r, echo = FALSE}
+mensual_sd_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/MENSUAL/mensual_sd_train.csv")
+
+summary(mensual_sd_train)
+```
+
+Para la predicción mensual de accidentes viales con solo daños, se consideraron las variables:
+
+- PERIODO: Variable que indica el año en que ocurren los accidente, esta variable se usó para la separación de datos en el proceso de validación cruzada. No hace parte del modelo predictivo.
+
+- MES: Variable que indica el mes en que ocurren los accidentes, puede tomar valores entre 1 y 12.
+
+- SEMANA: Variable que indica la semana del año en que ocurren los accidentes, puede tomar valores entre 1 y 53.
+
+- FESTIVO: Indica si en el mes existen días festivos o no.
+
+### **Dataset del modelo mensual: Heridos**
+
+```{r, echo = FALSE}
+mensual_h_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/MENSUAL/mensual_h_train.csv")
+
+summary(mensual_h_train)
+```
+
+Para la predicción mensual de accidentes viales con heridos, se consideraron las variables:
+
+- PERIODO: Variable que indica el año en que ocurren los accidente, esta variable se usó para la separación de datos en el proceso de validación cruzada. No hace parte del modelo predictivo.
+
+- MES: Variable que indica el mes en que ocurren los accidentes, puede tomar valores entre 1 y 12.
+
+- SEMANA: Variable que indica la semana del año en que ocurren los accidentes, puede tomar valores entre 1 y 53.
+
+- FESTIVO: Indica si en el mes existen días festivos o no.
+
+### **Dataset del modelo mensual: Muertos**
+
+```{r, echo = FALSE}
+mensual_m_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/MENSUAL/mensual_m_train.csv")
+
+summary(mensual_m_train)
+```
+
+Para la predicción mensual de accidentes viales con muertos, se consideraron las variables:
+
+- PERIODO: Variable que indica el año en que ocurren los accidente, esta variable se usó para la separación de datos en el proceso de validación cruzada. No hace parte del modelo predictivo.
+
+- MES: Variable que indica el mes en que ocurren los accidentes, puede tomar valores entre 1 y 12.
+
+- SEMANA: Variable que indica la semana del año en que ocurren los accidentes, puede tomar valores entre 1 y 53.
+
+- FESTIVO: Indica si en el mes existen días festivos o no.
+
+## **Modelos Semanales**
+
+### **Dataset del modelo semanal: Solo daños**
+
+```{r, echo = FALSE}
+semanal_sd_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/SEMANAL/semanal_sd_train.csv", sep= ";")
+
+summary(semanal_sd_train)
+```
+
+Para la predicción semanal de accidentes viales con solo daños, se consideraron las variables:
+
+- ANYO: Variable que indica el año en que ocurren los accidente, esta variable se usó para la separación de datos en el proceso de validación cruzada. No hace parte del modelo predictivo.
+
+
+- SEMANA: Variable que indica la semana del año en que ocurren los accidentes, puede tomar valores entre 1 y 53.
+
+- FESTIVO: Indica si en el mes existen días festivos o no. Toma valores entre 0 y 1.
+
+-SEMANA SANTA: Indica si es la semana en que se celebra semana santa. Toma valores entre 0 y 1.
+
+- COLOMBIAMODA: Indica si es la semana en que tiene lugar el evento de Colombia Moda. Toma valores entre 0 y 1.
+
+- FERIA DE FLORES: Indica si es la semana en que se celebra feria de flores. Toma valores entre 0 y 1.
+
+- ENERO_1: Indica si en la semana se encuentra el día primero de enero. Toma valores entre 0 y 1.
+
+- PUENTE_REYES: Indica si es la semana en que tiene lugar el conocido puente de reyes. Toma valores entre 0 y 1.
+
+- DIC_24: Indica si en la semana se encuentra el día 24 de diciembre. Toma valores entre 0 y 1.
+
+- DIC_31: Indica si en la semana se encuentra el día 31 de diciembre. Toma valores entre 0 y 1.
+
+### **Dataset del modelo semanal: Heridos**
+
+```{r, echo = FALSE}
+semanal_h_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/SEMANAL/semanal_h_train.csv", sep= ";")
+
+summary(semanal_h_train)
+```
+
+Para la predicción semanal de accidentes viales con solo daños, se consideraron las variables:
+
+- ANYO: Variable que indica el año en que ocurren los accidente, esta variable se usó para la separación de datos en el proceso de validación cruzada. No hace parte del modelo predictivo.
+
+
+- SEMANA: Variable que indica la semana del año en que ocurren los accidentes, puede tomar valores entre 1 y 53.
+
+- FESTIVO: Indica si en el mes existen días festivos o no. Toma valores entre 0 y 1.
+
+-SEMANA SANTA: Indica si es la semana en que se celebra semana santa. Toma valores entre 0 y 1.
+
+- COLOMBIAMODA: Indica si es la semana en que tiene lugar el evento de Colombia Moda. Toma valores entre 0 y 1.
+
+- FERIA DE FLORES: Indica si es la semana en que se celebra feria de flores. Toma valores entre 0 y 1.
+
+- ENERO_1: Indica si en la semana se encuentra el día primero de enero. Toma valores entre 0 y 1.
+
+- PUENTE_REYES: Indica si es la semana en que tiene lugar el conocido puente de reyes. Toma valores entre 0 y 1.
+
+- DIC_24: Indica si en la semana se encuentra el día 24 de diciembre. Toma valores entre 0 y 1.
+
+- DIC_31: Indica si en la semana se encuentra el día 31 de diciembre. Toma valores entre 0 y 1.
+
+### **Dataset del modelo semanal: Muertos**
+
+```{r, echo = FALSE}
+semanal_m_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/SEMANAL/semanal_m_train.csv", sep= ";")
+
+summary(semanal_m_train)
+```
+
+Para la predicción semanal de accidentes viales con solo daños, se consideraron las variables:
+
+- PERIODO: Variable que indica el año en que ocurren los accidente, esta variable se usó para la separación de datos en el proceso de validación cruzada. No hace parte del modelo predictivo.
+
+- SEMANA: Variable que indica la semana del año en que ocurren los accidentes, puede tomar valores entre 1 y 53.
+
+- FESTIVO: Indica si en el mes existen días festivos o no. Toma valores entre 0 y 1.
+
+-SEMANA SANTA: Indica si es la semana en que se celebra semana santa. Toma valores entre 0 y 1.
+
+- COLOMBIAMODA: Indica si es la semana en que tiene lugar el evento de Colombia Moda. Toma valores entre 0 y 1.
+
+- FERIA DE FLORES: Indica si es la semana en que se celebra feria de flores. Toma valores entre 0 y 1.
+
+- ENERO_1: Indica si en la semana se encuentra el día primero de enero. Toma valores entre 0 y 1.
+
+- PUENTE_REYES: Indica si es la semana en que tiene lugar el conocido puente de reyes. Toma valores entre 0 y 1.
+
+- DIC_24: Indica si en la semana se encuentra el día 24 de diciembre. Toma valores entre 0 y 1.
+
+- DIC_31: Indica si en la semana se encuentra el día 31 de diciembre. Toma valores entre 0 y 1.
+
+## **Modelos Diarios**
+
+### **Dataset del modelo diario: Solo daños**
+
+```{r, echo = FALSE}
+diario_sd_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/DIARIO/diario_sd_train.csv", sep= ";")
+
+summary(diario_sd_train)
+```
+
+Para la predicción diaria de accidentes viales con solo daños, se consideraron las variables:
+
+- ENERO_1: Indica si el día es el primero de enero. Sus valores son binarios - 0 y 1.
+
+- PUENTE_REYES: Indica si el día esta dentro del conocido puente de reyes. Sus valores son binarios - 0 y 1.
+
+- SEMANA SANTA: Indica si los días hacen parte de la celebración de semana santa. Sus valores son binarios - 0 y 1.
+
+- DIA_MADRES: Indica si es el día de las madres. Sus valores son binarios - 0 y 1.
+
+- FERIA DE FLORES: Indica si el día esta dentro de la celebración de feria de flores. Sus valores son binarios - 0 y 1.
+
+- DIC_24: Indica si el día  es 24 de diciembre. Sus valores son binarios - 0 y 1.
+
+- DIC_25: Indica si el día  es 25 de diciembre. Sus valores son binarios - entre 0 y 1.
+
+- DIC_31: Indica si el día es 31 de diciembre. Sus valores son binarios - 0 y 1.
+
+- FESTIVO: Indica si el día es festivo o no. Sus valores son binarios - 0 y 1.
+
+- Días de la semana: Variables dummy que indican el día de la semana (Martes, Miércoles, Jueves, Viernes, Habado y Domingo).
+
+### **Dataset del modelo diario: Heridos**
+
+```{r, echo = FALSE}
+diario_h_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/DIARIO/diario_h_train.csv", sep= ";")
+
+summary(diario_h_train)
+```
+
+Para la predicción diaria de accidentes viales con solo daños, se consideraron las variables:
+
+- PUENTE_REYES: Indica si el día esta dentro del conocido puente de reyes. Sus valores son binarios - 0 y 1.
+
+- SEMANA SANTA: Indica si los días hacen parte de la celebración de semana santa. Sus valores son binarios - 0 y 1.
+
+- COLOMBIAMODA: Indica si es el día esta dentro de la celebración de Colombia Moda. Sus valores son binarios - 0 y 1.
+
+- FESTIVO: Indica si el día es festivo o no. Sus valores son binarios - 0 y 1.
+
+- Días de la semana: Variables dummy que indican el día de la semana (Martes, Miércoles, Jueves, Viernes, Habado).
+
+### **Dataset del modelo diario: Muertos**
+
+```{r, echo = FALSE}
+diario_m_train <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/DIARIO/diario_m_train.csv", sep= ";")
+
+summary(diario_m_train)
+```
+
+Para la predicción diaria de accidentes viales con solo daños, se consideraron las variables:
+
+- DIC_25: Indica si el día  es 25 de diciembre. Sus valores son binarios - 0 y 1.
+
+- Hora: Variables dummy que indican la hora del día (H1, ..., H12).
+
+# **Modelos de predicción**
+
+En el proceso de moldeamiento se evaluaron tres técnicas diferentes usadas en problemas de predicción: Regresión lineal, Árbol regresor y RandomForest. Mediante la aplicación de validación cruzada, se pudo determinar las métricas de bondad de ajuste para cada modelo y con base a estas se eligió el mejor de los tres.
+
+Para todos los modelos (diarios, semanales y mensuales) el RandomForest fue el que mejores métricas de ajuste obtuvo. A continuación se presentan los 9 modelos propuestos para la predicción de la accidentalidad vial en la cuidad de Medellín. En cada apartado se encuentra un enlace que redirecciona a los notebook con el análisis de los modelos considerados.
+
+## **Modelos Mensuales**  {.tabset .tabset-fade .tabset-pills}
+
+### **Accidentes con Solo Daños**
+
+El mejor modelo para la predicción mensual de accidentes con solo daños, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](http://rpubs.com/Manulondo95/658192) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("31.04968","0.9565553", "31.23774", "0.955922", "0.60%")
+ 
+metricas_rf_final1 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final1
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+mensual_solo_danos_train <- mensual_sd_train
+mensual_solo_danos_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/MENSUAL/mensual_sd_test.csv", sep=";")
+
+mensual_solo_danos_train <- dplyr :: select(mensual_solo_danos_train, -PERIODO)
+mensual_solo_danos_test <- dplyr :: select(mensual_solo_danos_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+mejorRandomforest1 <- randomForest(SOLO_DANOS.R ~., data = mensual_solo_danos_train, 
+                                  mtry = 3 , nodesize = 7, ntree = 500, sampe_size= 0.8, 
+                                  importance = TRUE)
+mejorRandomforest1
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest1 <- predict(mejorRandomforest1, mensual_solo_danos_test)
+
+# Adición de las predicciones al dataset de test
+mensual_solo_danos_test <- cbind(mensual_solo_danos_test, pred_randomForest1)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest1, main = "Mejor modelo RandomForest - Mensual solo daños")
+```
+
+### **Accidentes con Heridos**
+
+El mejor modelo para la predicción mensual de accidentes con heridos se obtuvo analizando y ajustando los hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658271) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("38.01704","0.9523667", "51.69021", "0.9465184", "35.96%")
+ 
+metricas_rf_final2 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final2
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+mensual_heridos_train <- mensual_h_train
+mensual_heridos_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/MENSUAL/mensual_h_test.csv", sep=";")
+
+mensual_heridos_train <- dplyr :: select(mensual_heridos_train, -PERIODO)
+mensual_heridos_test <- dplyr :: select(mensual_heridos_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+
+mejorRandomforest2 <- randomForest(HERIDOS.R ~., data = mensual_heridos_train, mtry = 3, 
+                                  nodesize = 11, ntree = 500, sampe_size= 0.8, 
+                                  importance = TRUE)
+
+mejorRandomforest2
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest2 <- predict(mejorRandomforest2, mensual_heridos_test)
+
+# Adición de las predicciones al dataset de test
+mensual_heridos_test <- cbind(mensual_heridos_test, pred_randomForest2)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_h_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest2, main = "Mejor modelo RandomForest - Mensual Heridos")
+```
+
+### **Accidentes con Muertos**
+
+El mejor modelo para la predicción mensual de accidentes con muertos se obtuvo analizando y ajustando los hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658327) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("1.467876","0.6377918", "2.43624", "0.1949702", "65.9%")
+ 
+metricas_rf_final3 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final3
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+mensual_muertes_train <- mensual_m_train
+menusla_muertes_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/MENSUAL/mensual_m_test.csv", sep=";")
+
+mensual_muertes_train <- dplyr :: select(mensual_muertes_train, -PERIODO)
+mensual_muertes_test <- dplyr :: select(menusla_muertes_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+
+set.seed(101)
+mejorRandomforest3 <- randomForest(MUERTES.R ~., data = mensual_muertes_train, mtry = 3, nodesize = 11, 
+                                  ntree = 500, sample_size= 0.8, importance = TRUE)
+mejorRandomforest3
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest3 <- predict(mejorRandomforest3, mensual_muertes_test)
+
+# Adición de las predicciones al dataset de test
+mensual_muertes_test <- cbind(mensual_muertes_test, pred_randomForest3)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_m_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest3, main = "Mejor modelo RandomForest - Mensual Muerto")
+```
+
+## **Modelos Semanales**  {.tabset .tabset-fade .tabset-pills}
+
+### **Accidentes con Solo Daños**
+
+El mejor modelo para la predicción semanal de accidentes con solo daños, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658405) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("39.16793","0.9386766", "47.72794", "0.9018913", "21.8%")
+ 
+metricas_rf_final4 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final4
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+semanal_solo_danos_train <- semanal_sd_train
+semanal_solo_danos_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/SEMANAL/semanal_sd_test.csv", sep=";")
+
+semanal_solo_danos_train <- dplyr :: select(semanal_solo_danos_train, -ANYO)
+semanal_solo_danos_test  <- dplyr :: select(semanal_solo_danos_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+mejorRandomforest4 <- randomForest(SOLO_DANOS ~., data = semanal_solo_danos_train,
+                                   mtry = 8, nodesize = 7, ntree = 500, sampe_size= 0.8, 
+                                   importance = TRUE)
+mejorRandomforest4
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest4 <- predict(mejorRandomforest4, semanal_solo_danos_test)
+
+# Adición de las predicciones al dataset de test
+semanal_solo_danos_test <- cbind(semanal_solo_danos_test, pred_randomForest4)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest4, main = "Mejor modelo RandomForest - Semanal solo daños")
+```
+
+### **Accidentes con Heridos**
+
+El mejor modelo para la predicción semanal de accidentes con heridos, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658401) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("52.16871","0.9199635", "67.58887", "0.8806061", "29%")
+ 
+metricas_rf_final5 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final5
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+semanal_heridos_train <- semanal_h_train
+semanal_heridos_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/SEMANAL/semanal_h_test.csv", sep=";")
+
+semanal_heridos_train <- dplyr :: select(semanal_heridos_train , -ANYO)
+semanal_heridos_test <- dplyr :: select(semanal_heridos_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+mejorRandomforest5 <- randomForest(HERIDOS ~., data = semanal_heridos_train, 
+                                   mtry = 9, nodesize = 29, ntree = 500, 
+                                   sampe_size= 0.8, importance = TRUE)
+mejorRandomforest5
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest5 <- predict(mejorRandomforest5, semanal_heridos_test)
+
+# Adición de las predicciones al dataset de test
+semanal_heridos_test <- cbind(semanal_heridos_test, pred_randomForest5)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest5, main = "Mejor modelo RandomForest - Semanal Heridos")
+```
+
+
+### **Accidentes con Muertos**
+
+El mejor modelo para la predicción semanal de accidentes con muertes, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658421) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("1.723351","0.5197893", "2.931637", "0.2917401", "70%")
+ 
+metricas_rf_final6 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final6
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+semanal_muertes_train <- semanal_m_train
+semanal_muertes_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/SEMANAL/semanal_m_test.csv", sep=";")
+
+semanal_muertes_train <- dplyr :: select(semanal_muertes_train, -ANYO)
+semanal_muertes_test <- dplyr :: select(semanal_muertes_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+mejorRandomforest6 <- randomForest(MUERTES ~., data = semanal_muertes_train, mtry = 6, 
+                                  nodesize = 7, sampe_size = 0.8,
+                                  ntree = 500, importance = TRUE)
+mejorRandomforest6
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest6 <- predict(mejorRandomforest6, semanal_muertes_test)
+
+# Adición de las predicciones al dataset de test
+semanal_muertes_test <- cbind(semanal_muertes_test, pred_randomForest6)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest6, main = "Mejor modelo RandomForest - Semanal Muertos")
+```
+
+
+## **Modelos Diarios**  {.tabset .tabset-fade .tabset-pills}
+
+### **Accidentes con Solo Daños**
+
+El mejor modelo para la predicción diaria de accidentes con solo daños, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658435) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("10.13616","0.6372575", "10.86129", "0.5764182", "7.2%")
+ 
+metricas_rf_final7 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final7
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+diario_solo_danos_train <- diario_sd_train
+diario_solo_danos_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/DIARIO/diario_sd_test.csv", sep=";")
+
+#diario_solo_danos_train <- dplyr :: select(diario_solo_danos_train, -DIA)
+diario_solo_danos_test <- dplyr :: select(diario_solo_danos_test, -DIA)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+
+mejorRandomforest7 <- randomForest(SOLO_DANOS ~., data = diario_solo_danos_train, 
+                                   mtry = 8, nodesize = 11, ntree = 500, 
+                                   sampe_size= 0.8, importance = TRUE)
+mejorRandomforest7
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest7 <- predict(mejorRandomforest7, diario_solo_danos_test)
+
+# Adición de las predicciones al dataset de test
+diario_solo_danos_test <- cbind(diario_solo_danos_test, pred_randomForest7)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest7, main = "Mejor modelo RandomForest - Diario solo daños")
+```
+
+### **Accidentes con Heridos**
+
+El mejor modelo para la predicción diaria de accidentes con heridos, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](https://rpubs.com/Manulondo95/658443) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación RMSE")
+Resultados <- c("10.66488","0.346224", "11.82162", "0.424438", "10.8%")
+ 
+metricas_rf_final8 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final8
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+diario_heridos_train <- diario_h_train
+diario_heridos_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/DIARIO/diario_h_test.csv", sep=";")
+
+diario_heridos_train <- dplyr :: select(diario_heridos_train, -PERIODO)
+diario_heridos_test  <- dplyr :: select(diario_heridos_test , -DIA)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+
+mejorRandomforest8 <- randomForest(HERIDOS ~., data = diario_heridos_train, mtry = 10, 
+                                  nodesize = 7, ntree = 500, sampe_size= 0.8, 
+                                  importance = TRUE)
+
+mejorRandomforest8
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest8 <- predict(mejorRandomforest8, diario_heridos_test)
+
+# Adición de las predicciones al dataset de test
+diario_heridos_test <- cbind(diario_heridos_test, pred_randomForest8)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest8, main = "Mejor modelo RandomForest - Diario Heridos")
+```
+
+
+### **Accidentes con Muertos**
+
+El mejor modelo para la predicción diaria de accidentes con muertes, se obtuvo analizando los Hiperparametros del RandomForest. En este caso se evaluaron diferentes combinaciones de mtry, nodesizes y sample_size.
+
+En el siguiente [enlace](http://rpubs.com/Manulondo95/658448) se puede encontrar la evaluación de los tres modelos considerados y el tuning realizado al modelo de RandomForest. En el proceso de validación se obtuvieron las siguientes métricas de ajuste:
+
+```{r, echo=FALSE}
+Metrica <- c("RMSE Train", "Rsquared_Train", "Rsquared_Test", "Rsquared_Test", "Variación Rsquared")
+Resultados <- c("0.2375619","0.8966603", "0.8676137", "0.3795068	", "3.2%")
+ 
+metricas_rf_final9 <- data.frame(Metrica, Resultados)
+
+metricas_rf_final9
+```
+
+**Entrenamiento del modelo**
+
+Se entrena el modelo con todas las observaciones que componen la base de datos de estudio:
+
+```{r, echo = FALSE}
+### lectura de datos a predecir #####
+diario_muertes_train <- diario_m_train
+diario_muertes_test <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/ENTREGA FINAL/DIARIO/diario_m_test.csv", sep=";")
+
+diario_muertes_train <- dplyr :: select(diario_muertes_train, -PERIODO)
+diario_muertes_test <- dplyr :: select(diario_muertes_test, -PERIODO)
+```
+
+```{r, warning= FALSE}
+#### entrenamiento del modelo ####
+set.seed(101)
+
+mejorRandomforest9 <- randomForest(MUERTOS ~., data = diario_muertes_train, mtry = 14, 
+                                  nodesize = 11, ntree = 500, sample_size = 0.8, 
+                                  importance = TRUE)
+mejorRandomforest9
+```
+
+**Predicciones**
+
+Se realizan las predicciones para el año 2019:
+
+```{r}
+#### predicciones de test####
+pred_randomForest9 <- predict(mejorRandomforest9, diario_muertes_test)
+
+# Adición de las predicciones al dataset de test
+diario_muertes_test<- cbind(diario_muertes_test, pred_randomForest9)
+
+#Guardamos resultados en csv
+#write.csv(solo_danos_test, file="mensual_sd_predicción.csv", row.names = FALSE)
+
+```
+
+**Resultado del bosque en función del número de arboles**
+
+```{r, echo= FALSE}
+plot(mejorRandomforest1, main = "Mejor modelo RandomForest - Diario Muertes")
+```
+
+# **Agrupamiento de los barrios por nivel de accidentalidad**
+
+Para el presente trabajo se realizó el modelamiento de dos tipos de agrupamiento:
+
+1. El primer agrupamiento considera múltiples variables con el fin de calificar zonas según el riesgo de accidentalidad vial. Las variables consideradas fueron: El promedio de la accidentalidad, los dias de la semana, la cantidad acumulada de accidentes mensuales, fines de semana y días laborales. También se incluyo la gravedad y el tipo de accidentes.
+
+Aqui se puede encontrar el desarrollo del primer agrupamiento [Agrupamiento Multivariable](https://rpubs.com/wajovel/acciodentesmed)
+
+Los resultados de este modelamiento pueden verse en el aplicativo [sinfomovil](https://william-jovel.shinyapps.io/Accidentes/) en la pestaña: *"Cluster multivariable"*
+
+También se incluyo un cluster jerarquico por comunas, pues da mayor comprensión visual respecto a la simulitud de zonas con respecto a su nivel de accidentalidad. Este cluster jerarquico también se encuentra en el aplicativo [sinfomovil](https://william-jovel.shinyapps.io/Accidentes/) en la pestaña: *"Dendograma"*
+
+
+2. En el segundo agrupamiento se consideraron también diferentes variables, pero a diferencia del primero, estas variables hacen parte de un clustering específico según su gravedad. Las variables consideradas fueron: cantidad de accidentes en cada barrio, proporción de muertos / heridos / atropellos en los accidentes de cada barrio según correrponda.
+
+Aqui se puede encontrar el desarrollo del primer agrupamiento [Agrupamiento Univariable](https://rpubs.com/wajovel/Clustacc2)
+
+Los resultados de este modelamiento pueden verse en el aplicativo [sinfomovil](https://william-jovel.shinyapps.io/Accidentes/) en la pestaña: *"Cluster Univariable"*
+
+# **Conclusiones**
+
+- El proceso de exploración de los datos ayudó a conocer la proporción de accidentes según el tipo (heridos, muertos, solo daños) y a realizar análisis descriptivos que en horizontes de tiempo diario, semanal y mensual permitieron descubrir que las variables que explicaban la accidentalidad para el caso diario no necesariamente aportan o son significativas para la estimación de los modelos semanales y mensuales, razón por la cual fue necesario encontrar nuevas variables.
+
+- Complementar el dataset preprocesado con nuevas variables como festividades, eventos de interés, días laborables y franjas horarias para cada horizonte de tiempo sirvió para mejorar el nivel de predicción de los modelos.
+
+- Los modelos Random Forest y algunos modelos de regresión lineal múltiple fueron los que más se utilizaron durante la estimación de los modelos debido a que obtuvieron mejores indicadores tanto de R2 y RMSE tanto en predicción como en validación.
+
+- Las predicciones realizadas se hicieron con un horizonte de tiempo a un año dado que el error aumentaba con una ventana de tiempo mayor.  
+
+- El modelo de clustering permitió conformar 3 grupos de clusters, el primero para los barrios con alta accidentalidad los fines de semana y con mayor número de accidentes en enero, este grupo fue evaluado con un riesgo medio. El segundo cluster relaciona los barrios con alta accidentalidad durante toda la semana, pero con menor número de accidentes en enero y abril y evaluado con un riesgo bajo. Por último, el tercer cluster corresponde a los barrios con la mayor accidentalidad los fines de semana, con mayor proporción de muertes y heridos y siendo evaluado con un riesgo alto.
+
+# **Comentarios Adicionales**
+
+- El trabajo desarrollado permitió aplicar diferentes técnicas de modelado para estimar la accidentalidad en Medellín a partir de los datos históricos disponibles, siendo éste un ejercicio responsable y acorde a las exigencias del mundo donde se busca solucionar problemas reales en escenarios de mucha incertidumbre, donde se hace difícil encontrar relaciones entre las variables y donde deben de intentarse una y otra vez alternativas para satisfacer los requisitos de los problemas de minería de datos.
+
+- Para el equipo representó un gran aprendizaje ahondar en las técnicas de clustering, en cómo asociar modelos que contengan múltiples variables para agrupar por similitud las comunas y barrios de Medellín y explorar a su vez las bondades de diseñar un aplicativo en RShiny -en tiempo récord- que fuera dinámico, práctico y usable para el cliente final.
+
+- Estimar modelos que tuvieran un R2 superior a 70% fue un propósito desde el principio y para ello se construyeron n mil variables y sus interacciones con el fin de mejorar los métricos de éxito, utilizando en ese sentido varios métodos de regresión. Consideramos que como ejercicio sirvió mucho para salirnos de la zona de confort y pensar en esas variables que pueden influir potencialmente en la variable dependiente haciendo múltiples ensayos
+
+# **Referencias**
+
+Orellana Alvear, J. (2018). Arboles de decision y Random Forest. Retrieved September 08, 2020, from https://bookdown.org/content/2031/ensambladores-random-forest-parte-ii.html#ejemplo-de-regresion-tuning
+
+
+# **Enlaces de interes**
+
+- Repositorio de Github: https://github.com/Manuela9595/Prediccion_Accidentalidad_medellin
+- Video de presentación: https://www.youtube.com/watch?v=wa_Dwvy1Krc&feature=youtu.be
+
+
+
+
+
