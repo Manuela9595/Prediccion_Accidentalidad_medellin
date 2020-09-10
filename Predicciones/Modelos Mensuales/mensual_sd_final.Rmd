@@ -1,0 +1,499 @@
+---
+title: "**Evaluación de modelos para la predicción mensual de accidentes viales con Gravedad: Solo Daños**<br>"
+
+author: "*Alexis A. Arenas Bustamante, Juan E. Arroyave Duque, William A. Jovel Tamayo, Manuela Londoño Ocampo.* <br> Curso de Analítica Predictiva <br> Universidad Nacional de Colombia <br> Facultad de Minas <br> Medellín"
+date: "Septiembre de 2019"
+
+output:
+  html_document:
+    theme: cosmo
+    highlight: haddock
+    number_sections: true
+    df_print: paged
+    toc: true
+    toc_float:
+      collapsed: True
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# **Librerías Necesarias**
+
+```{r setup, warning=FALSE, message=FALSE}
+library(dplyr) # data wrangling
+library(ranger)
+library(caret)
+library(corrplot)
+library(rsample)     # data splitting 
+library(rpart)       # performing regression trees
+library(rpart.plot)  # plotting regression trees
+library(ipred)       # bagging
+require(MASS)
+library(randomForest)
+library(tidyverse)
+library(ggpubr)
+```
+
+Se consideran tres modelos para la predicción mensual de los accidentes viales con solo daños: Regresión lineal, Árbol de regresión y Random Forest. A continuación se presenta la evaluación de cada uno:
+
+
+# **Dataset propuesto para el modelo mensual de accidentalidad vial : Solo daños**
+
+```{r datos_mensuales, echo = FALSE}
+
+datos_mensualesSD <- read.csv("~/Docs/MAESTRIA/ANALITICA PREDICTIVA/Trabajo Final/Datasets/RAPIDM/mensual_sd_2.csv", sep=",")
+
+head(datos_mensualesSD)
+
+```
+
+# **Estadísticas Descriptivas**  {.tabset .tabset-fade .tabset-pills}
+
+## **Summary del conjunto de datos**
+
+```{r echo = FALSE}
+summary(datos_mensualesSD)
+```
+
+## **Histograma de la variable dependiente**
+
+```{r hitogramas, echo=FALSE}
+library(ggplot2)
+
+ggplot(datos_mensualesSD, aes(SOLO_DANOS)) + 
+  geom_histogram(bins=15, fill = "#9999CC", position = 'identity') + 
+  xlab("Accidentes con Solo Daños") + ylab("Frecuencia") +
+  theme_classic2()
+
+```
+
+## **Boxplots por mes**
+
+```{r, echo=FALSE}
+datosSD <- datos_mensualesSD 
+datosSD$MES <- as.factor(datosSD$MES)
+
+ggplot(datosSD, aes(x=MES, y=SOLO_DANOS, fill=MES)) + 
+  geom_boxplot(alpha=0.3) +
+  xlab("Mes") + ylab("Accidentes con solo daños") +
+  theme(legend.position="none") + theme_classic()
+```
+
+Se puede observar la presencia de ciertos valores atípicos por mes. Estos se trataran por medio de la imputación con mediana.
+
+## **Correlación entre variables consideradas**
+
+```{r correlacion, echo=FALSE}
+datosSD$MES <- as.integer(datosSD$MES)
+M <- cor(datosSD)
+corrplot(M, method = "color")
+```
+
+Se puede observar que la variable mas correlacionada con la cantidad de accidentes mensuales con solo daños es FESTIVOS. En cada uno de los modelos se identificará la importancia de las variables, de modo que solo se incluyan aquellas que tengan una influencia significativa sobre la variable dependiente. El periodo no hará parte de ningún modelo puesto que solo se usa para la partición de los datos en conjuntos de entrenamiento y validación.
+
+```{r atipicos, include=FALSE}
+# df es el dataFrame que recibimos (ej. activity)
+# colNameData es la columna de los datos (ej. "steps")
+# colNameBy es la columna por la que trocearemos (ej. "userId")
+
+outliersReplace <- function(df, colNameData, colNameBy){
+  # creamos una nueva columna llamada igual que colNameData pero con .R
+  colNameData.R <- paste(colNameData, "R", sep=".")
+  df[colNameData.R] <- df[colNameData]
+  
+  # obtenemos los IDs por los que partir el dataframe
+  IDs <- unique(df[,c(colNameBy)])
+  for (id in IDs){
+    data <- df[df[colNameBy] == id, c(colNameData) ]
+    
+    Q  <- quantile(data)
+    minimo <- Q[1]    # valor minimo
+    Q1     <- Q[2]    # primer cuartil
+    Me     <- Q[3]    # mediana
+    Q3     <- Q[4]    # tercer cuartil
+    maximo <- Q[5]    # valor maximo
+    IQR    <- Q3 - Q1
+    
+    lowLimit  <- max(minimo, Q1 - 1.5*IQR)
+    highLimit <- min(maximo, Q3 + 1.5*IQR)
+    
+    # todos los valores donde colNameBy es igual a id
+    # y el valor de colNameData es > Q3 + 1.5 * IQR
+    # lo reemplazamos por la mediana
+    df[df[colNameBy] == id & df[colNameData] > highLimit, c(colNameData.R)] <- Me
+    
+    # lo mismo para el umbral inferior
+    df[df[colNameBy] == id & df[colNameData] < lowLimit, c(colNameData.R)] <- Me
+    
+    cat(paste("El", colNameBy, id, "la mediana(",colNameData,") ==", Me, "\n", sep=" " ))
+    
+  }
+  df   # devolvemos el valor del dataFrame
+}
+```
+
+## **Evaluación y tratamiento de atípicos**
+
+Se define una función para la identificación e imputación de los valores atípicos basado en el rango intercuartil. Se realiza la imputación con la mediana.
+
+```{r imputacion, include =FALSE}
+soloD <- datosSD
+soloD_imputed <- outliersReplace(soloD,"SOLO_DANOS","MES")
+soloD_imputed$MES <- as.factor(soloD_imputed$MES)
+```
+
+En la siguiente gráfica se pueden observar las distribuciones de los accidentes antes y después del tratamiento de datos atípicos
+ 
+```{r, echo= FALSE}
+par(mfrow = c(2,1))    # para ponerlos uno encima de otro
+
+boxplot(SOLO_DANOS   ~ MES, data = soloD_imputed, main = "Sin reemplazo de atípicos", 
+        xlab = "Mes", ylab = "Accidentes: solo daños")
+  
+
+boxplot(SOLO_DANOS.R ~ MES, data = soloD_imputed, main = "Con reemplazo de atípicos",  
+        xlab = "Mes", ylab = "Accidentes: solo daños")
+
+soloD_imputed <- dplyr :: select(soloD_imputed, -SOLO_DANOS)
+```
+
+```{r, include = FALSE}
+write.csv(soloD_imputed, file="mensual_sd_train.csv", row.names = FALSE)
+```
+
+# **Partición de los datos conjuntos de train y test**
+
+Para la validación se usaran los datos de accidentes viales ocurridos en el año 2018.
+
+*Datos de Train*: Se cuenta 318 observaciones para el entrenamiento de los modelos
+
+```{r particion, echo=FALSE, echo= FALSE}
+soloD_train <- soloD_imputed[soloD_imputed$PERIODO < 2018, ]
+soloD_test <- soloD_imputed[soloD_imputed$PERIODO >= 2018, ]
+
+dim(soloD_train)
+```
+
+Datos de Test: Se cuenta con 80 observaciones para la validación de los modelos
+
+```{r, echo= FALSE}
+dim(soloD_test)
+```
+
+Una vez realizada la partición de los datos, se procede con la eliminación de la variable PERIODO en ambos datasets.
+
+```{r}
+soloD_train <- dplyr :: select(soloD_train, -PERIODO)
+soloD_test <- dplyr :: select(soloD_test, -PERIODO)
+```
+
+# **Modelo de predicción considerados** {.tabset .tabset-fade .tabset-pills}
+
+## **Regresión Lineal**
+
+**Entrenamiento del modelo**
+
+```{r regresion_linear}
+
+# Variable como factor
+soloD_train$SEMANA <- as.factor(soloD_train$SEMANA)
+regresion_1 <- lm(SOLO_DANOS.R ~., data = soloD_train)
+summary(regresion_1)
+```
+
+Las variables MES y SEMANA se incluyeron en el modelo de regresión lineal como factores. Algunas de las variables incluidad en el modelo no son significativas, pero según el summary se tiene un buen R-squared, que explica el 93.62 % de la accidentalidad mensual con gravedad de solo daños. De igual manera el valor P del estadístico F es significativo.
+
+**Métricas de Bondad para regresión lineal**
+
+```{r, echo= FALSE}
+# Compute R^2 from true and predicted values
+
+soloD_test$SEMANA <- as.factor(soloD_test$SEMANA)
+y_pred_train_sd <- predict(regresion_1, soloD_train)
+y_pred_test_sd <- predict(regresion_1, soloD_test)
+
+library(caret)
+reg_1 <- data.frame(RMSE_Train = RMSE(y_pred_train_sd, soloD_train$SOLO_DANOS.R),
+                    Rsquared_Train = R2(y_pred_train_sd, soloD_train$SOLO_DANOS.R),
+                    RMSE_Test = RMSE(y_pred_test_sd, soloD_test$SOLO_DANOS.R),
+                    Rsquared_Test = R2(y_pred_test_sd, soloD_test$SOLO_DANOS.R))
+reg_1
+```
+
+Comparando las métricas consideradas tanto para el entrenamiento como para la validación del modelo, observamos que en ambos se obtienen R-squared bueno, superior al 90%. Adicionalmente la variación entre los RMSE es del 23%, esta variación es un poco alta, lo que puede indicar sobre entrenamiento.
+
+**Ajuste de las predicciones vs valores reales**
+
+```{r, echo= FALSE}
+plot(y_pred_test_sd, soloD_test$SOLO_DANOS.R,las=1, xlab="Predicciones", ylab = "Accidentes con solo daños")
+abline(a=1,b=1,lwd=2,col="red")
+```
+
+En el gráfico de dispersión se puede observar que el modelo tiene buena capacidad de predicción, más en valores bajos y altos.
+
+## **Árbol Regresor**
+
+**Entrenamiento del modelo**
+
+Se toma el modelo mas simple para el árbol regresor, a partir de este se realizará una búsqueda tipo **grid search** para la definición de parámetros de restricción óptimos. Se crean dos funciones para extraer el mínimo error asociado con el valor óptimo de costo de complejidad (CP) de cada modelo y para el extraer el valor óptimo CP.
+
+```{r}
+set.seed(123)
+dt_sd <- rpart(
+  formula = SOLO_DANOS.R ~ .,
+  data    = soloD_train,
+  method  = "anova")
+```
+
+**Representación gráfica del árbol regresor sin tuning**
+
+```{r, echo= FALSE}
+rpart.plot(dt_sd)
+```
+
+**Ajuste de parámetro de restricción para el árbol regresor**
+
+Se realiza una búsqueda de los parámetros óptimos de minsplit y maxdepth para el árbol regresor: 
+
+En la siguiente gráfica se puede observar el numero optimo de nodos identificado por el modelo que reduce el error asociado. Este será el punto de partida para definir entre que valores puede variar el parámetro de profundidad del árbol. Vemos que el arbol optimo inicial tiene 6 divisiones y 7 nodos finales.
+
+```{r}
+plotcp(dt_sd)
+
+dt_sd2 <- rpart(
+    formula = SOLO_DANOS.R ~ .,
+    data    = soloD_train,
+    method  = "anova", 
+    control = list(cp = 0, xval = 10)
+)
+
+```
+
+El error de validación cruzada asociado a dicho arbol es de 0.114, este valor se puede mejorar en el proceso de tuning
+
+```{r, echo= FALSE}
+dt_sd$cptable
+```
+
+El siguiente código define una función grid para la búsqueda de diferentes combinaciones de minsplit y maxdepth. También las funciones que extraen el optimo cp y el mínimo error asociado.
+
+```{r}
+hyper_grid_sd <- expand.grid(
+  minsplit = seq(5, 30, 1),
+  maxdepth = seq(5, 8, 1))
+
+models_sd <- list()
+
+for (i in 1:nrow(hyper_grid_sd)) {
+  
+  # get minsplit, maxdepth values at row i
+  minsplit <- hyper_grid_sd$minsplit[i]
+  maxdepth <- hyper_grid_sd$maxdepth[i]
+
+  # train a model and store in the list
+  models_sd[[i]] <- rpart(
+    formula = SOLO_DANOS.R ~ .,
+    data    = soloD_train,
+    method  = "anova",
+    control = list(minsplit = minsplit, maxdepth = maxdepth)
+    )
+}
+
+# function to get optimal cp
+get_cp <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  cp <- x$cptable[min, "CP"] 
+}
+
+# function to get minimum error
+get_min_error <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  xerror <- x$cptable[min, "xerror"] 
+}
+
+
+```
+
+Agregaremos los resultados de la búsqueda a la grilla de hyper-parámetros y filtraremos los 5 valores con error mínimo.
+
+```{r}
+hyper_grid_sd %>%
+  mutate(
+    cp    = purrr::map_dbl(models_sd, get_cp),
+    error = purrr::map_dbl(models_sd, get_min_error)
+    ) %>%
+  arrange(error) %>%
+  top_n(-5, wt = error)
+```
+
+Vemos que el error se redujo a 0.084, lo cual indica mejores modelos en comparación con el modelo inicial. Se entrena el árbol regresor con las combinaciones que encabezan los resultados anteriores:
+
+```{r}
+optimal_tree_sd <- rpart(
+    formula = SOLO_DANOS.R ~ .,
+    data    = soloD_train,
+    method  = "anova",
+    control = list(minsplit = 21, maxdepth = 7, cp = 0.01)
+    )
+```
+
+**Métricas de Bondad para el mejor árbol regresor**
+
+```{r}
+soloD_test$MES <- as.factor(soloD_test$MES)
+soloD_test$SEMANA <- as.factor(soloD_test$SEMANA)
+
+
+pred_dt_train = predict(optimal_tree_sd, newdata=soloD_train)
+pred_dt_test = predict(optimal_tree_sd, newdata=soloD_test)
+
+dt_sd_op1 <- data.frame(RMSE_Train = RMSE(pred_dt_train, soloD_train$SOLO_DANOS.R),
+                    Rsquared_Train = R2(pred_dt_train, soloD_train$SOLO_DANOS.R),
+                    RMSE_Test = RMSE(pred_dt_test, soloD_test$SOLO_DANOS.R),
+                    Rsquared_Test = R2(pred_dt_test, soloD_test$SOLO_DANOS.R))
+
+
+dt_sd_op1
+```
+
+Comparando las métricas consideradas tanto para el entrenamiento como para la validación del árbol óptimo, observamos que en ambos casos se obtuvo buenos R-squared, superiores al 90%. La variación entre los RMSE es del 8%, esta variación es baja y nos indica mejor ajuste en comparación con el modelo de regresión lineal.
+
+**Mejor árbol regresor obtenido**
+
+```{r, echo= FALSE}
+#plot(soloD_test$SOLO_DANOS.R, y=pred_dt1_test, pch=20, las=1, xlab='y', ylab=expression(hat(y)))
+#abline(a=0, b=1, lty="dashed", col="blue")
+
+library(rpart.plot)
+prp(optimal_tree_sd)
+```
+
+## **Random Forest**
+
+**Entrenamiento del modelo**
+
+Se toma el modelo mas simple, a partir de este se realizará una búsqueda tipo **grid search** de los hiper parámetros óptimos con el uso de la librería Range. Se analizaron en total 144 modelos diferentes con variaciones en los parámetros de mtry, mínimo tamaño de muestras en el nodo, y tamaño de la muestra.
+
+```{r}
+set.seed(101)
+rf_sd = randomForest(SOLO_DANOS.R ~ ., data = soloD_train)
+rf_sd
+```
+
+Inicialmente, observamos que la varianza explicada por el modelo es del 83,98 %.
+
+**Este gráfico muestra el error vs. el número de árboles**
+
+```{r, echo= FALSE}
+plot(rf_sd)
+```
+
+
+ **Afinamiento del modelo Random Forest**
+
+Se define la siguiente grilla de búsqueda:
+
+```{r}
+set.seed(101)
+
+# hyperparameter grid search
+hyper_grid_rf <- expand.grid(
+  mtry       = seq(1, 3, by = 1),
+  node_size  = seq(7, 30, by = 2),
+  sampe_size = c(.55, .632, .70, .80),
+  OOB_RMSE   = 0
+)
+# total number of combinations
+#nrow(hyper_grid_rf)
+```
+
+Se utiliza la librería Ranger para la búsqueda de los mejores hyper parámetros:
+
+```{r}
+for(i in 1:nrow(hyper_grid_rf)) {
+  
+  # train model
+  model <- ranger(
+    formula         = SOLO_DANOS.R ~ ., 
+    data            = soloD_train, 
+    num.trees       = 500,
+    mtry            = hyper_grid_rf$mtry[i],
+    min.node.size   = hyper_grid_rf$node_size[i],
+    sample.fraction = hyper_grid_rf$sampe_size[i],
+    seed            = 101
+  )
+  
+  # add OOB error to grid
+  hyper_grid_rf$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+
+hyper_grid_rf %>% 
+  dplyr::arrange(OOB_RMSE) %>%
+  head(10)
+```
+
+Se ajusta el modelo con los mejores hyper parámetros obtenidos:
+
+```{r}
+set.seed(101)
+mejorRandomforest <- randomForest(SOLO_DANOS.R ~., data = soloD_train, mtry = 3, 
+                                  nodesize = 7, ntree = 500, sampe_size= 0.8, 
+                                  importance = TRUE)
+
+mejorRandomforest
+
+```
+
+Con la función importance() se extrae la importancia de las variables.
+
+```{r}
+importancia_pred <- as.data.frame(importance(mejorRandomforest, scale = TRUE))
+importancia_pred <- rownames_to_column(importancia_pred, var = "variable")
+p1 <- ggplot(data = importancia_pred, aes(x = reorder(variable, `%IncMSE`),
+                                          y = `%IncMSE`,
+                                          fill = `%IncMSE`)) +
+    labs(x = "variable", title = "Reducción de MSE") +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom")
+
+p2 <- ggplot(data = importancia_pred, aes(x = reorder(variable, IncNodePurity),
+                                          y = IncNodePurity,
+                                          fill = IncNodePurity)) +
+    labs(x = "variable", title = "Reducción de pureza") +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom")
+ggarrange(p1, p2)
+```
+
+**Métricas de bondad para modelo de Random Forest**
+
+```{r}
+
+pred_randomForest_t <- predict(mejorRandomforest, soloD_train)
+pred_randomForest <- predict(mejorRandomforest, soloD_test)
+
+dt_rf_1 <- data.frame(RMSE_Train = RMSE(pred_randomForest_t, soloD_train$SOLO_DANOS.R),
+                    Rsquared_Train = R2(pred_randomForest_t, soloD_train$SOLO_DANOS.R),
+                    RMSE_Test = RMSE(pred_randomForest, soloD_test$SOLO_DANOS.R),
+                    Rsquared_Test = R2(pred_randomForest, soloD_test$SOLO_DANOS.R))
+
+
+dt_rf_1
+
+```
+
+Observamos que los R-squared para entrenamiento y validación son mas altos en comparación con los modelos de regresión lineal y Árbol regresor. El RMSE presenta una variación mínima, lo que hace que el modelo de RandomForest sea el mejor entre todos los modelos evaluados.
+
+
